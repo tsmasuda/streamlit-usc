@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Paste Image</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: sans-serif;
+      }
+      #paste-area {
+        border: 1px dashed #999;
+        padding: 12px;
+        border-radius: 6px;
+        color: #555;
+        font-size: 0.9rem;
+      }
+      #status {
+        margin-top: 6px;
+        font-size: 0.85rem;
+        color: #666;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="paste-area" tabindex="0">Click here and paste image (Ctrl+V)</div>
+    <div id="status"></div>
+    <script>
+      const area = document.getElementById("paste-area");
+      const status = document.getElementById("status");
+
+      function sendValue(value) {
+        const msg = {
+          isStreamlitMessage: true,
+          type: "streamlit:setComponentValue",
+          value,
+        };
+        window.parent.postMessage(msg, "*");
+      }
+
+      function sendReady() {
+        const msg = {
+          isStreamlitMessage: true,
+          type: "streamlit:componentReady",
+          apiVersion: 1,
+        };
+        window.parent.postMessage(msg, "*");
+      }
+
+      function sendHeight() {
+        const msg = {
+          isStreamlitMessage: true,
+          type: "streamlit:setFrameHeight",
+          height: document.body.scrollHeight,
+        };
+        window.parent.postMessage(msg, "*");
+      }
+
+      area.addEventListener("paste", (event) => {
+        const items = (event.clipboardData || window.clipboardData).items;
+        for (const item of items) {
+          if (item.type.indexOf("image") === 0) {
+            const file = item.getAsFile();
+            const reader = new FileReader();
+            reader.onload = () => {
+              status.textContent = "Image captured";
+              sendValue(reader.result);
+              sendHeight();
+            };
+            reader.readAsDataURL(file);
+            event.preventDefault();
+            return;
+          }
+        }
+        status.textContent = "No image in clipboard";
+        sendHeight();
+      });
+
+      window.addEventListener("message", (event) => {
+        if (event.data && event.data.type === "streamlit:render") {
+          sendHeight();
+        }
+      });
+
+      sendReady();
+      sendHeight();
+    </script>
+  </body>
+</html>
