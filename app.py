@@ -32,6 +32,7 @@ def init_db():
                 lob TEXT,
                 image_blob BLOB,
                 theme TEXT NOT NULL,
+                evaluation TEXT,
                 estimation INTEGER,
                 team TEXT,
                 sprint TEXT
@@ -47,6 +48,12 @@ def init_db():
             CREATE TABLE IF NOT EXISTS theme (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE
+            );
+
+            CREATE TABLE IF NOT EXISTS evaluation (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                note TEXT
             );
 
             CREATE TABLE IF NOT EXISTS backlog_dependency (
@@ -69,6 +76,8 @@ def init_db():
             conn.execute("ALTER TABLE backlog ADD COLUMN lob TEXT")
         if "image_blob" not in backlog_columns:
             conn.execute("ALTER TABLE backlog ADD COLUMN image_blob BLOB")
+        if "evaluation" not in backlog_columns:
+            conn.execute("ALTER TABLE backlog ADD COLUMN evaluation TEXT")
         if sub_task_info and sub_task_info["notnull"]:
             conn.executescript(
                 """
@@ -79,12 +88,13 @@ def init_db():
                     lob TEXT,
                     image_blob BLOB,
                     theme TEXT NOT NULL,
+                    evaluation TEXT,
                     estimation INTEGER,
                     team TEXT,
                     sprint TEXT
                 );
-                INSERT INTO backlog_new (id, task, sub_task, lob, image_blob, theme, estimation, team, sprint)
-                SELECT id, task, sub_task, lob, image_blob, theme, estimation, team, sprint FROM backlog;
+                INSERT INTO backlog_new (id, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint)
+                SELECT id, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint FROM backlog;
                 DROP TABLE backlog;
                 ALTER TABLE backlog_new RENAME TO backlog;
                 """
@@ -108,12 +118,13 @@ def init_db():
                     lob TEXT,
                     image_blob BLOB,
                     theme TEXT NOT NULL,
+                    evaluation TEXT,
                     estimation INTEGER,
                     team TEXT,
                     sprint TEXT
                 );
-                INSERT INTO backlog_new (id, task, sub_task, lob, image_blob, theme, estimation, team, sprint)
-                SELECT id, task, sub_task, lob, image_blob, theme, CAST(estimation AS INTEGER), team, sprint FROM backlog;
+                INSERT INTO backlog_new (id, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint)
+                SELECT id, task, sub_task, lob, image_blob, theme, evaluation, CAST(estimation AS INTEGER), team, sprint FROM backlog;
                 DROP TABLE backlog;
                 ALTER TABLE backlog_new RENAME TO backlog;
                 """
@@ -141,12 +152,13 @@ def init_db():
                     lob TEXT,
                     image_blob BLOB,
                     theme TEXT NOT NULL,
+                    evaluation TEXT,
                     estimation INTEGER,
                     team TEXT,
                     sprint TEXT
                 );
-                INSERT INTO backlog_new (id, task, sub_task, lob, image_blob, theme, estimation, team, sprint)
-                SELECT id, task, sub_task, lob, image_blob, theme, CAST(estimation AS INTEGER), team, sprint FROM backlog;
+                INSERT INTO backlog_new (id, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint)
+                SELECT id, task, sub_task, lob, image_blob, theme, evaluation, CAST(estimation AS INTEGER), team, sprint FROM backlog;
                 DROP TABLE backlog;
                 ALTER TABLE backlog_new RENAME TO backlog;
                 """
@@ -177,11 +189,22 @@ def init_db():
                 ALTER TABLE dependency_new RENAME TO dependency;
                 """
             )
+        evaluation_info = conn.execute("PRAGMA table_info(evaluation)").fetchall()
+        evaluation_columns = [row["name"] for row in evaluation_info]
+        if "note" not in evaluation_columns:
+            conn.execute("ALTER TABLE evaluation ADD COLUMN note TEXT")
         conn.execute(
             """
             INSERT OR IGNORE INTO theme (name)
             SELECT DISTINCT theme FROM backlog
             WHERE theme IS NOT NULL AND TRIM(theme) != ''
+            """
+        )
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO evaluation (name)
+            SELECT DISTINCT evaluation FROM backlog
+            WHERE evaluation IS NOT NULL AND TRIM(evaluation) != ''
             """
         )
         conn.execute("PRAGMA foreign_keys = ON")
@@ -192,10 +215,31 @@ def fetch_themes():
         rows = conn.execute("SELECT name FROM theme ORDER BY name").fetchall()
     return [row["name"] for row in rows]
 
+def fetch_evaluations():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT name FROM evaluation ORDER BY name").fetchall()
+    return [row["name"] for row in rows]
+
 
 def fetch_theme_rows():
     with get_conn() as conn:
-        rows = conn.execute("SELECT * FROM theme ORDER BY name").fetchall()
+        rows = conn.execute(
+            """
+            SELECT
+                t.id,
+                t.name,
+                COUNT(b.id) AS backlog_count
+            FROM theme t
+            LEFT JOIN backlog b ON b.theme = t.name
+            GROUP BY t.id, t.name
+            ORDER BY t.name
+            """
+        ).fetchall()
+    return rows
+
+def fetch_evaluation_rows():
+    with get_conn() as conn:
+        rows = conn.execute("SELECT * FROM evaluation ORDER BY name").fetchall()
     return rows
 
 
@@ -218,6 +262,7 @@ def fetch_backlogs():
                 b.lob,
                 b.image_blob,
                 b.theme,
+                b.evaluation,
                 b.estimation,
                 b.team,
                 b.sprint,
@@ -250,6 +295,7 @@ def fetch_backlogs_for_dependency(dependency_id):
                 b.task,
                 b.sub_task,
                 b.theme,
+                b.evaluation,
                 b.estimation,
                 b.team,
                 b.sprint
@@ -278,14 +324,23 @@ def insert_theme(conn, name):
     )
     return cursor.lastrowid
 
+def insert_evaluation(conn, name, note=None):
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO evaluation (name, note) VALUES (?, ?)",
+        (name, note),
+    )
+    return cursor.lastrowid
 
-def insert_backlog(conn, task, sub_task, lob, image_blob, theme, estimation, team, sprint):
+
+def insert_backlog(
+    conn, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint
+):
     cursor = conn.execute(
         """
-        INSERT INTO backlog (task, sub_task, lob, image_blob, theme, estimation, team, sprint)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO backlog (task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (task, sub_task, lob, image_blob, theme, estimation, team, sprint),
+        (task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint),
     )
     return cursor.lastrowid
 
@@ -375,7 +430,7 @@ st.markdown(
 
 tab_choice = st.radio(
     "View",
-    ["Backlog", "Dependencies", "Themes", "Sprint x Team"],
+    ["Backlog", "Dependencies", "Themes", "Evaluations", "Sprint x Team"],
     horizontal=True,
     key="active_tab",
     label_visibility="collapsed",
@@ -383,6 +438,7 @@ tab_choice = st.radio(
 
 if tab_choice == "Backlog":
     themes = fetch_themes()
+    evaluations = fetch_evaluations()
     dependency_rows = fetch_dependencies()
     dependency_choices = {dependency_label(row): row["id"] for row in dependency_rows}
     existing_dependency_labels = list(dependency_choices.keys())
@@ -403,61 +459,45 @@ if tab_choice == "Backlog":
             step=1,
             key="add_dep_count",
         )
-        existing_dep_count = st.number_input(
-            "Existing dependency count",
-            min_value=0,
-            max_value=10,
-            value=0,
-            step=1,
-            key="add_existing_dep_count",
-        )
-        pasted_image = paste_image_component(
-            "Paste image (optional)",
-            key="add_backlog_image_paste",
-        )
-        if pasted_image:
-            st.image(pasted_image, caption="Pasted image")
-
         with st.form("add_backlog_form"):
-            left, right = st.columns(2, gap="large")
-            with left:
+            image_col, middle_col, right_col = st.columns(3, gap="large")
+            with image_col:
+                pasted_image = paste_image_component(
+                    "Paste image (optional)",
+                    key="add_backlog_image_paste",
+                )
+                if pasted_image:
+                    st.image(pasted_image, caption="Pasted image")
+            with middle_col:
                 task = st.text_input("Task")
-                sub_task = st.text_input("Sub-task (optional)")
+                theme_options = [""] + themes
+                theme_choice = st.selectbox("Theme", theme_options, index=0)
                 lob = st.text_input("LOB (optional)")
-                estimation_input = st.number_input(
+                team = st.selectbox("Team", [""] + BACKLOG_TEAMS, index=0)
+                evaluation_options = [""] + evaluations
+                evaluation_choice = st.selectbox(
+                    "Evaluation",
+                    evaluation_options,
+                    index=0,
+                    key="add_evaluation_choice",
+                )
+            with right_col:
+                sub_task = st.text_input("Sub-task (optional)")
+                new_theme = st.text_input("New theme (optional)")
+                estimation_input_right = st.number_input(
                     "Estimation",
                     min_value=0,
                     step=1,
                     value=0,
+                    key="add_estimation_right",
                 )
-                estimation_none = st.checkbox(
-                    "No estimation",
-                    value=False,
-                    key="add_estimation_none",
-                )
-                team = st.selectbox("Team", [""] + BACKLOG_TEAMS, index=0)
-            with right:
-                theme_options = [""] + themes
-                theme_choice = st.selectbox("Theme", theme_options, index=0)
-                new_theme = st.text_input("New theme (optional)")
                 sprint = st.selectbox("Sprint", [""] + SPRINTS, index=0)
-                selected_dependency_labels = []
-                selected_so_far = set()
-                for i in range(existing_dep_count):
-                    available = [
-                        label
-                        for label in existing_dependency_labels
-                        if label not in selected_so_far
-                    ]
-                    existing_dep_options = ["None"] + available
-                    selected_label = st.selectbox(
-                        f"Existing dependency {i + 1}",
-                        existing_dep_options,
-                        key=f"add_existing_dep_{i}",
-                    )
-                    if selected_label != "None":
-                        selected_dependency_labels.append(selected_label)
-                        selected_so_far.add(selected_label)
+            selected_dependency_labels = st.multiselect(
+                "Existing dependencies",
+                options=existing_dependency_labels,
+                default=[],
+                key="add_existing_deps",
+            )
 
             new_dependencies = []
             for i in range(add_new_dep_count):
@@ -498,10 +538,11 @@ if tab_choice == "Backlog":
                     if theme == "":
                         st.error("Backlog theme is required.")
                         return
+                    evaluation_value = evaluation_choice or None
                     team_value = team or None
                     sprint_value = sprint or None
                     image_bytes = pasted_image
-                    estimation_value = None if estimation_none else int(estimation_input)
+                    estimation_value = int(estimation_input_right)
                     sub_task_value = sub_task.strip() or None
                     lob_value = lob.strip() or None
                     with get_conn() as conn:
@@ -513,6 +554,7 @@ if tab_choice == "Backlog":
                             lob_value,
                             image_bytes,
                             theme.strip(),
+                            evaluation_value,
                             estimation_value,
                             team_value,
                             sprint_value,
@@ -555,62 +597,23 @@ if tab_choice == "Backlog":
             for row in dependency_rows
             if row["id"] in selected_dep_ids
         ]
-        existing_dep_count = st.number_input(
-            "Existing dependency count",
-            min_value=0,
-            max_value=10,
-            value=len(selected_dep_labels),
-            step=1,
-            key="edit_existing_dep_count",
-        )
-        current_image = backlog_row["image_blob"]
-        if current_image:
-            if isinstance(current_image, memoryview):
-                current_image = current_image.tobytes()
-            st.image(current_image, caption="Current image")
-        pasted_replace_image = paste_image_component(
-            "Paste image to replace (optional)",
-            key="edit_backlog_image_paste",
-        )
-        if pasted_replace_image:
-            st.image(pasted_replace_image, caption="New image preview")
-        remove_image = st.checkbox("Remove image", key="remove_backlog_image")
-
         with st.form("edit_backlog_form"):
-            left, right = st.columns(2, gap="large")
-            with left:
+            image_col, middle_col, right_col = st.columns(3, gap="large")
+            with image_col:
+                current_image = backlog_row["image_blob"]
+                if current_image:
+                    if isinstance(current_image, memoryview):
+                        current_image = current_image.tobytes()
+                    st.image(current_image, caption="Current image")
+                pasted_replace_image = paste_image_component(
+                    "Paste image to replace (optional)",
+                    key="edit_backlog_image_paste",
+                )
+                if pasted_replace_image:
+                    st.image(pasted_replace_image, caption="New image preview")
+                remove_image = st.checkbox("Remove image", key="remove_backlog_image")
+            with middle_col:
                 edit_task = st.text_input("Task", value=backlog_row["task"])
-                edit_sub_task = st.text_input(
-                    "Sub-task (optional)",
-                    value=backlog_row["sub_task"] or "",
-                )
-                edit_lob = st.text_input(
-                    "LOB (optional)",
-                    value=backlog_row["lob"] or "",
-                )
-                estimation_default = (
-                    0 if backlog_row["estimation"] is None else int(backlog_row["estimation"])
-                )
-                edit_estimation_input = st.number_input(
-                    "Estimation",
-                    min_value=0,
-                    step=1,
-                    value=estimation_default,
-                    key="edit_estimation_value",
-                )
-                edit_estimation_none = st.checkbox(
-                    "No estimation",
-                    value=backlog_row["estimation"] is None,
-                    key="edit_estimation_none",
-                )
-                team_options = [""] + BACKLOG_TEAMS
-                team_value = backlog_row["team"] or ""
-                edit_team = st.selectbox(
-                    "Team",
-                    team_options,
-                    index=team_options.index(team_value) if team_value in team_options else 0,
-                )
-            with right:
                 theme_options = [""] + themes
                 theme_value = backlog_row["theme"] or ""
                 if theme_value and theme_value not in theme_options:
@@ -624,7 +627,48 @@ if tab_choice == "Backlog":
                     index=default_theme,
                     key="edit_theme_choice",
                 )
+                edit_lob = st.text_input(
+                    "LOB (optional)",
+                    value=backlog_row["lob"] or "",
+                )
+                team_options = [""] + BACKLOG_TEAMS
+                team_value = backlog_row["team"] or ""
+                edit_team = st.selectbox(
+                    "Team",
+                    team_options,
+                    index=team_options.index(team_value) if team_value in team_options else 0,
+                )
+                evaluation_options = [""] + evaluations
+                evaluation_value = backlog_row["evaluation"] or ""
+                if evaluation_value and evaluation_value not in evaluation_options:
+                    evaluation_options.append(evaluation_value)
+                default_evaluation = (
+                    evaluation_options.index(evaluation_value)
+                    if evaluation_value in evaluation_options
+                    else 0
+                )
+                edit_evaluation_choice = st.selectbox(
+                    "Evaluation",
+                    evaluation_options,
+                    index=default_evaluation,
+                    key="edit_evaluation_choice",
+                )
+            with right_col:
+                edit_sub_task = st.text_input(
+                    "Sub-task (optional)",
+                    value=backlog_row["sub_task"] or "",
+                )
                 edit_new_theme = st.text_input("New theme (optional)")
+                estimation_default = (
+                    0 if backlog_row["estimation"] is None else int(backlog_row["estimation"])
+                )
+                edit_estimation_input = st.number_input(
+                    "Estimation",
+                    min_value=0,
+                    step=1,
+                    value=estimation_default,
+                    key="edit_estimation_value",
+                )
                 sprint_options = [""] + SPRINTS
                 sprint_value = backlog_row["sprint"] or ""
                 edit_sprint = st.selectbox(
@@ -632,33 +676,17 @@ if tab_choice == "Backlog":
                     sprint_options,
                     index=sprint_options.index(sprint_value) if sprint_value in sprint_options else 0,
                 )
-                edit_selected_dependency_labels = []
-                selected_so_far = set()
-                for i in range(existing_dep_count):
-                    default_label = (
-                        selected_dep_labels[i]
-                        if i < len(selected_dep_labels)
-                        else "None"
-                    )
-                    available = [
-                        label
-                        for label in existing_dependency_labels
-                        if label not in selected_so_far or label == default_label
-                    ]
-                    existing_dep_options = ["None"] + available
-                    try:
-                        default_index = existing_dep_options.index(default_label)
-                    except ValueError:
-                        default_index = 0
-                    selected_label = st.selectbox(
-                        f"Existing dependency {i + 1}",
-                        existing_dep_options,
-                        index=default_index,
-                        key=f"edit_existing_dep_{i}",
-                    )
-                    if selected_label != "None":
-                        edit_selected_dependency_labels.append(selected_label)
-                        selected_so_far.add(selected_label)
+            default_dependency_labels = [
+                label
+                for label in selected_dep_labels
+                if label in existing_dependency_labels
+            ]
+            edit_selected_dependency_labels = st.multiselect(
+                "Existing dependencies",
+                options=existing_dependency_labels,
+                default=default_dependency_labels,
+                key="edit_existing_deps",
+            )
 
             edit_new_dependencies = []
             for i in range(edit_new_dep_count):
@@ -699,6 +727,7 @@ if tab_choice == "Backlog":
                     if edit_theme == "":
                         st.error("Theme is required.")
                         return
+                    edit_evaluation_value = edit_evaluation_choice or None
                     edit_team_value = edit_team or None
                     edit_sprint_value = edit_sprint or None
                     if remove_image:
@@ -709,9 +738,7 @@ if tab_choice == "Backlog":
                         image_bytes = backlog_row["image_blob"]
                         if isinstance(image_bytes, memoryview):
                             image_bytes = image_bytes.tobytes()
-                    edit_estimation_value = (
-                        None if edit_estimation_none else int(edit_estimation_input)
-                    )
+                    edit_estimation_value = int(edit_estimation_input)
                     edit_sub_task_value = edit_sub_task.strip() or None
                     edit_lob_value = edit_lob.strip() or None
                     with get_conn() as conn:
@@ -719,7 +746,7 @@ if tab_choice == "Backlog":
                         conn.execute(
                             """
                             UPDATE backlog
-                            SET task = ?, sub_task = ?, lob = ?, image_blob = ?, theme = ?, estimation = ?, team = ?, sprint = ?
+                            SET task = ?, sub_task = ?, lob = ?, image_blob = ?, theme = ?, evaluation = ?, estimation = ?, team = ?, sprint = ?
                             WHERE id = ?
                             """,
                             (
@@ -728,6 +755,7 @@ if tab_choice == "Backlog":
                                 edit_lob_value,
                                 image_bytes,
                                 edit_theme.strip(),
+                                edit_evaluation_value,
                                 edit_estimation_value,
                                 edit_team_value,
                                 edit_sprint_value,
@@ -864,6 +892,7 @@ if tab_choice == "Backlog":
                                 backlog_row["lob"],
                                 image_bytes,
                                 backlog_row["theme"],
+                                backlog_row["evaluation"],
                                 item_estimation,
                                 backlog_row["team"],
                                 backlog_row["sprint"],
@@ -924,6 +953,11 @@ if tab_choice == "Backlog":
                     columns,
                     key="map_backlog_theme",
                 )
+                map_evaluation = st.selectbox(
+                    "Map: evaluation (optional)",
+                    columns,
+                    key="map_backlog_evaluation",
+                )
                 map_estimation = st.selectbox(
                     "Map: estimation (optional)",
                     columns,
@@ -979,6 +1013,7 @@ if tab_choice == "Backlog":
                                     continue
                                 sub_task_value = get_cell(row, map_sub_task)
                                 lob_value = get_cell(row, map_lob)
+                                evaluation_value = get_cell(row, map_evaluation)
                                 team_value = get_cell(row, map_team)
                                 sprint_value = get_cell(row, map_sprint)
                                 estimation_value = None
@@ -989,6 +1024,8 @@ if tab_choice == "Backlog":
                                     skip_reasons["invalid_estimation"] += 1
                                     continue
                                 insert_theme(conn, theme_value)
+                                if evaluation_value:
+                                    insert_evaluation(conn, evaluation_value)
                                 insert_backlog(
                                     conn,
                                     task_value,
@@ -996,6 +1033,7 @@ if tab_choice == "Backlog":
                                     lob_value,
                                     None,
                                     theme_value,
+                                    evaluation_value,
                                     estimation_value,
                                     team_value,
                                     sprint_value,
@@ -1012,37 +1050,81 @@ if tab_choice == "Backlog":
                         st.rerun()
 
     st.subheader("Backlog list")
-    backlog_filter_cols = st.columns(4, gap="small")
-    with backlog_filter_cols[0]:
-        backlog_search = st.text_input(
-            "Search",
-            key="backlog_search",
-            help="Filter by task/sub-task/theme/dependency task",
+    backlog_filter_row1 = st.columns(4, gap="small")
+    with backlog_filter_row1[0]:
+        backlog_task_filter = st.text_input(
+            "Task (filter)",
+            key="backlog_task_filter",
         )
-    with backlog_filter_cols[1]:
-        backlog_team_filter = st.selectbox(
-            "Team (filter)",
-            [""] + BACKLOG_TEAMS,
-            index=0,
-            key="backlog_team_filter",
+    with backlog_filter_row1[1]:
+        backlog_sub_task_filter = st.text_input(
+            "Sub-task (filter)",
+            key="backlog_sub_task_filter",
         )
-    with backlog_filter_cols[2]:
-        backlog_sprint_filter = st.selectbox(
-            "Sprint (filter)",
-            [""] + SPRINTS,
-            index=0,
-            key="backlog_sprint_filter",
+    with backlog_filter_row1[2]:
+        backlog_lob_filter = st.text_input(
+            "LOB (filter)",
+            key="backlog_lob_filter",
         )
-    with backlog_filter_cols[3]:
+    with backlog_filter_row1[3]:
         backlog_theme_filter = st.selectbox(
             "Theme (filter)",
             [""] + themes,
             index=0,
             key="backlog_theme_filter",
         )
+    backlog_filter_row2 = st.columns(4, gap="small")
+    with backlog_filter_row2[0]:
+        backlog_team_filter = st.selectbox(
+            "Team (filter)",
+            [""] + BACKLOG_TEAMS,
+            index=0,
+            key="backlog_team_filter",
+        )
+    with backlog_filter_row2[1]:
+        backlog_sprint_filter = st.selectbox(
+            "Sprint (filter)",
+            [""] + SPRINTS,
+            index=0,
+            key="backlog_sprint_filter",
+        )
+    with backlog_filter_row2[2]:
+        backlog_search = st.text_input(
+            "Search",
+            key="backlog_search",
+            help="Filter by task/sub-task/lob/theme/evaluation",
+        )
+    with backlog_filter_row2[3]:
+        backlog_evaluation_filter = st.selectbox(
+            "Evaluation (filter)",
+            [""] + evaluations,
+            index=0,
+            key="backlog_evaluation_filter",
+        )
     if backlog_rows:
         backlog_df = pd.DataFrame([dict(row) for row in backlog_rows])
         filtered_backlog_df = backlog_df.copy()
+        if backlog_task_filter.strip():
+            query = backlog_task_filter.strip()
+            filtered_backlog_df = filtered_backlog_df[
+                filtered_backlog_df["task"]
+                .fillna("")
+                .str.contains(query, case=False, na=False)
+            ]
+        if backlog_sub_task_filter.strip():
+            query = backlog_sub_task_filter.strip()
+            filtered_backlog_df = filtered_backlog_df[
+                filtered_backlog_df["sub_task"]
+                .fillna("")
+                .str.contains(query, case=False, na=False)
+            ]
+        if backlog_lob_filter.strip():
+            query = backlog_lob_filter.strip()
+            filtered_backlog_df = filtered_backlog_df[
+                filtered_backlog_df["lob"]
+                .fillna("")
+                .str.contains(query, case=False, na=False)
+            ]
         if backlog_team_filter:
             filtered_backlog_df = filtered_backlog_df[
                 filtered_backlog_df["team"] == backlog_team_filter
@@ -1055,10 +1137,14 @@ if tab_choice == "Backlog":
             filtered_backlog_df = filtered_backlog_df[
                 filtered_backlog_df["theme"] == backlog_theme_filter
             ]
+        if backlog_evaluation_filter:
+            filtered_backlog_df = filtered_backlog_df[
+                filtered_backlog_df["evaluation"] == backlog_evaluation_filter
+            ]
         if backlog_search.strip():
             query = backlog_search.strip().lower()
             searchable = (
-                filtered_backlog_df[["task", "sub_task", "lob", "theme", "dependency_names"]]
+                filtered_backlog_df[["task", "sub_task", "lob", "theme", "evaluation"]]
                 .fillna("")
                 .agg(" ".join, axis=1)
                 .str.lower()
@@ -1102,6 +1188,9 @@ if tab_choice == "Backlog":
     with action_cols[1]:
         edit_disabled = selected_backlog is None
         if st.button("Edit selected backlog", disabled=edit_disabled):
+            st.session_state.pop("edit_backlog_image_paste", None)
+            st.session_state.pop("edit_backlog_image_paste_data", None)
+            st.session_state.pop("remove_backlog_image", None)
             edit_backlog_dialog(selected_backlog)
     with action_cols[2]:
         split_disabled = selected_backlog is None
@@ -1461,7 +1550,9 @@ if tab_choice == "Themes":
 
     st.subheader("Theme list")
     if theme_rows:
-        theme_df = pd.DataFrame([dict(row) for row in theme_rows])
+        theme_df = pd.DataFrame([dict(row) for row in theme_rows]).rename(
+            columns={"backlog_count": "Backlog count"}
+        )
         selection = st.dataframe(
             theme_df,
             width="stretch",
@@ -1506,6 +1597,133 @@ if tab_choice == "Themes":
     if theme_rows and not selected_ids:
         st.info("Select themes from the list to edit or delete.")
     elif theme_rows and len(selected_ids) > 1:
+        st.info("Multiple items selected. Edit is disabled; Delete is enabled.")
+
+if tab_choice == "Evaluations":
+    evaluation_rows = fetch_evaluation_rows()
+
+    @st.dialog("Add evaluation")
+    def add_evaluation_dialog():
+        with st.form("add_evaluation_form"):
+            evaluation_name = st.text_input("Name")
+            evaluation_note = st.text_area("Note", height=120)
+            submitted = st.form_submit_button("Add evaluation")
+            if submitted:
+                if not evaluation_name.strip():
+                    st.error("Evaluation name is required.")
+                else:
+                    with get_conn() as conn:
+                        insert_evaluation(
+                            conn,
+                            evaluation_name.strip(),
+                            evaluation_note.strip() or None,
+                        )
+                    st.success("Evaluation added.")
+                    st.rerun()
+
+    @st.dialog("Edit evaluation")
+    def edit_evaluation_dialog(evaluation_row):
+        with st.form("edit_evaluation_form"):
+            new_name = st.text_input("Name", value=evaluation_row["name"])
+            new_note = st.text_area(
+                "Note",
+                value=evaluation_row["note"] or "",
+                height=120,
+            )
+            submitted = st.form_submit_button("Update evaluation")
+            if submitted:
+                if not new_name.strip():
+                    st.error("Evaluation name is required.")
+                else:
+                    old_name = evaluation_row["name"]
+                    try:
+                        with get_conn() as conn:
+                            conn.execute(
+                                "UPDATE evaluation SET name = ?, note = ? WHERE id = ?",
+                                (new_name.strip(), new_note.strip() or None, evaluation_row["id"]),
+                            )
+                            conn.execute(
+                                "UPDATE backlog SET evaluation = ? WHERE evaluation = ?",
+                                (new_name.strip(), old_name),
+                            )
+                        st.success("Evaluation updated.")
+                        st.rerun()
+                    except sqlite3.IntegrityError:
+                        st.error("Evaluation name already exists.")
+
+    @st.dialog("Delete evaluation")
+    def delete_evaluation_dialog(selected_ids, evaluation_lookup):
+        items = []
+        for item_id in selected_ids:
+            row = evaluation_lookup.get(item_id)
+            if row:
+                items.append(row["name"])
+        st.write(f"Delete {len(selected_ids)} evaluation item(s)?")
+        if items:
+            st.write(items)
+        if st.button("Confirm delete", type="primary"):
+            placeholders = ",".join(["?"] * len(selected_ids))
+            with get_conn() as conn:
+                conn.execute(
+                    f"DELETE FROM evaluation WHERE id IN ({placeholders})",
+                    tuple(selected_ids),
+                )
+                conn.execute(
+                    f"UPDATE backlog SET evaluation = '' WHERE evaluation IN ({placeholders})",
+                    tuple(items),
+                )
+            st.success("Evaluation deleted.")
+            st.rerun()
+
+    st.subheader("Evaluation list")
+    if evaluation_rows:
+        evaluation_df = pd.DataFrame([dict(row) for row in evaluation_rows])
+        selection = st.dataframe(
+            evaluation_df,
+            width="stretch",
+            on_select="rerun",
+            selection_mode="multi-row",
+        )
+        if selection and selection.selection.rows:
+            selected_ids = [
+                int(evaluation_df.iloc[index]["id"]) for index in selection.selection.rows
+            ]
+            st.session_state["selected_evaluation_ids"] = selected_ids
+        else:
+            st.session_state.pop("selected_evaluation_ids", None)
+    else:
+        st.info("No evaluations yet.")
+
+    evaluation_by_id = {row["id"]: row for row in evaluation_rows}
+    selected_ids = st.session_state.get("selected_evaluation_ids", [])
+    selected_evaluation = (
+        evaluation_by_id.get(selected_ids[0]) if len(selected_ids) == 1 else None
+    )
+
+    if selected_ids:
+        if len(selected_ids) == 1 and selected_evaluation:
+            st.caption(f"Selected: {selected_evaluation['name']}")
+        else:
+            st.caption(f"Selected: {len(selected_ids)} items")
+    else:
+        st.caption("Selected: none")
+
+    action_cols = st.columns(3, gap="small")
+    with action_cols[0]:
+        if st.button("Add evaluation"):
+            add_evaluation_dialog()
+    with action_cols[1]:
+        edit_disabled = selected_evaluation is None
+        if st.button("Edit selected evaluation", disabled=edit_disabled):
+            edit_evaluation_dialog(selected_evaluation)
+    with action_cols[2]:
+        delete_disabled = not selected_ids
+        if st.button("Delete selected evaluation", disabled=delete_disabled):
+            delete_evaluation_dialog(selected_ids, evaluation_by_id)
+
+    if evaluation_rows and not selected_ids:
+        st.info("Select evaluations from the list to edit or delete.")
+    elif evaluation_rows and len(selected_ids) > 1:
         st.info("Multiple items selected. Edit is disabled; Delete is enabled.")
 
 if tab_choice == "Sprint x Team":
