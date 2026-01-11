@@ -710,6 +710,22 @@ if tab_choice == "Backlog":
                     )
                 edit_new_dependencies.append((dep_task, dep_sub_task, dep_team))
 
+            linked_dependencies = [
+                row for row in dependency_rows if row["id"] in selected_dep_ids
+            ]
+            if linked_dependencies:
+                linked_dependency_df = pd.DataFrame(
+                    [dict(row) for row in linked_dependencies]
+                )
+                st.markdown("Existing dependencies (table)")
+                st.dataframe(
+                    linked_dependency_df[["task", "sub_task", "team"]],
+                    width="stretch",
+                    hide_index=True,
+                )
+            else:
+                st.info("No dependencies linked to this backlog yet.")
+
             updated = st.form_submit_button("Update backlog")
             if updated:
                 if not edit_task.strip():
