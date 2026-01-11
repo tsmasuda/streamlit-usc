@@ -1271,17 +1271,17 @@ if tab_choice == "Backlog":
             key="backlog_sprint_filter",
         )
     with backlog_filter_row2[2]:
-        backlog_search = st.text_input(
-            "Search",
-            key="backlog_search",
-            help="Filter by task/sub-task/lob/theme/evaluation",
-        )
-    with backlog_filter_row2[3]:
         backlog_evaluation_filter = st.selectbox(
             "Evaluation (filter)",
             [""] + evaluations,
             index=0,
             key="backlog_evaluation_filter",
+        )
+    with backlog_filter_row2[3]:
+        backlog_search = st.text_input(
+            "Search",
+            key="backlog_search",
+            help="Filter by task/sub-task/lob/theme/evaluation",
         )
     if backlog_rows:
         backlog_df = pd.DataFrame([dict(row) for row in backlog_rows])
@@ -1582,23 +1582,47 @@ if tab_choice == "Dependencies":
                         st.rerun()
 
     st.subheader("Dependency list")
-    dependency_filter_cols = st.columns(2, gap="small")
+    dependency_filter_cols = st.columns(4, gap="small")
     with dependency_filter_cols[0]:
-        dependency_search = st.text_input(
-            "Search",
-            key="dependency_search",
-            help="Filter by task/sub-task/team",
+        dependency_task_filter = st.text_input(
+            "Task (filter)",
+            key="dependency_task_filter",
         )
     with dependency_filter_cols[1]:
+        dependency_sub_task_filter = st.text_input(
+            "Sub-task (filter)",
+            key="dependency_sub_task_filter",
+        )
+    with dependency_filter_cols[2]:
         dependency_team_filter = st.selectbox(
             "Team (filter)",
             [""] + DEPENDENCY_TEAMS,
             index=0,
             key="dependency_team_filter",
         )
+    with dependency_filter_cols[3]:
+        dependency_search = st.text_input(
+            "Search",
+            key="dependency_search",
+            help="Filter by task/sub-task/team",
+        )
     if dependency_rows:
         dependency_df = pd.DataFrame([dict(row) for row in dependency_rows])
         filtered_dependency_df = dependency_df.copy()
+        if dependency_task_filter.strip():
+            query = dependency_task_filter.strip()
+            filtered_dependency_df = filtered_dependency_df[
+                filtered_dependency_df["task"]
+                .fillna("")
+                .str.contains(query, case=False, na=False)
+            ]
+        if dependency_sub_task_filter.strip():
+            query = dependency_sub_task_filter.strip()
+            filtered_dependency_df = filtered_dependency_df[
+                filtered_dependency_df["sub_task"]
+                .fillna("")
+                .str.contains(query, case=False, na=False)
+            ]
         if dependency_team_filter:
             filtered_dependency_df = filtered_dependency_df[
                 filtered_dependency_df["team"] == dependency_team_filter
