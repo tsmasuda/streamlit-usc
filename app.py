@@ -804,6 +804,188 @@ if tab_choice == "Backlog":
             st.success("Backlog deleted.")
             st.rerun()
 
+    @st.dialog("Merge backlogs")
+    def merge_backlog_dialog(selected_ids, backlog_lookup):
+        selected_rows = [backlog_lookup.get(item_id) for item_id in selected_ids]
+        selected_rows = [row for row in selected_rows if row]
+        if len(selected_rows) < 2:
+            st.info("Select at least two backlog items to merge.")
+            return
+
+        selected_labels = [backlog_label(row) for row in selected_rows]
+        st.write("Merging these items:")
+        st.write(selected_labels)
+
+        primary_options = [row["id"] for row in selected_rows]
+        primary_id = st.selectbox(
+            "Merge into",
+            options=primary_options,
+            format_func=lambda item_id: backlog_label(backlog_lookup[item_id]),
+            key="merge_primary_id",
+        )
+        primary_row = backlog_lookup[primary_id]
+
+        theme_values = {row["theme"] for row in selected_rows if row["theme"]}
+        if len(theme_values) > 1:
+            st.caption("Themes differ across selected items. Choose the merged theme.")
+
+        combined_dep_ids = set()
+        for row in selected_rows:
+            combined_dep_ids.update(fetch_backlog_dependency_ids(row["id"]))
+        default_dep_labels = [
+            dependency_label(row)
+            for row in dependency_rows
+            if row["id"] in combined_dep_ids
+        ]
+        default_dep_labels = [
+            label for label in default_dep_labels if label in existing_dependency_labels
+        ]
+
+        estimation_sum = sum(
+            int(row["estimation"]) if row["estimation"] is not None else 0
+            for row in selected_rows
+        )
+
+        with st.form(f"merge_backlog_form_{primary_id}"):
+            merge_col_left, merge_col_mid, merge_col_right = st.columns(3, gap="large")
+            with merge_col_left:
+                merge_task = st.text_input(
+                    "Task",
+                    value=primary_row["task"],
+                    key=f"merge_task_{primary_id}",
+                )
+                theme_options = [""] + themes
+                theme_value = primary_row["theme"] or ""
+                if theme_value and theme_value not in theme_options:
+                    theme_options.append(theme_value)
+                merge_theme_choice = st.selectbox(
+                    "Theme",
+                    theme_options,
+                    index=theme_options.index(theme_value) if theme_value in theme_options else 0,
+                    key=f"merge_theme_choice_{primary_id}",
+                )
+                merge_lob = st.text_input(
+                    "LOB (optional)",
+                    value=primary_row["lob"] or "",
+                    key=f"merge_lob_{primary_id}",
+                )
+                team_options = [""] + BACKLOG_TEAMS
+                team_value = primary_row["team"] or ""
+                merge_team = st.selectbox(
+                    "Team",
+                    team_options,
+                    index=team_options.index(team_value) if team_value in team_options else 0,
+                    key=f"merge_team_{primary_id}",
+                )
+                evaluation_options = [""] + evaluations
+                evaluation_value = primary_row["evaluation"] or ""
+                if evaluation_value and evaluation_value not in evaluation_options:
+                    evaluation_options.append(evaluation_value)
+                merge_evaluation_choice = st.selectbox(
+                    "Evaluation",
+                    evaluation_options,
+                    index=(
+                        evaluation_options.index(evaluation_value)
+                        if evaluation_value in evaluation_options
+                        else 0
+                    ),
+                    key=f"merge_evaluation_choice_{primary_id}",
+                )
+            with merge_col_mid:
+                merge_sub_task = st.text_input(
+                    "Sub-task (optional)",
+                    value=primary_row["sub_task"] or "",
+                    key=f"merge_sub_task_{primary_id}",
+                )
+                merge_new_theme = st.text_input(
+                    "New theme (optional)",
+                    key=f"merge_new_theme_{primary_id}",
+                )
+                merge_estimation = st.number_input(
+                    "Estimation",
+                    min_value=0,
+                    step=1,
+                    value=estimation_sum,
+                    key=f"merge_estimation_{primary_id}",
+                )
+                sprint_options = [""] + SPRINTS
+                sprint_value = primary_row["sprint"] or ""
+                merge_sprint = st.selectbox(
+                    "Sprint",
+                    sprint_options,
+                    index=sprint_options.index(sprint_value) if sprint_value in sprint_options else 0,
+                    key=f"merge_sprint_{primary_id}",
+                )
+            with merge_col_right:
+                merge_selected_dependency_labels = st.multiselect(
+                    "Existing dependencies",
+                    options=existing_dependency_labels,
+                    default=default_dep_labels,
+                    key=f"merge_existing_deps_{primary_id}",
+                )
+
+            merge_submit = st.form_submit_button("Merge backlogs")
+            if merge_submit:
+                if not merge_task.strip():
+                    st.error("Backlog task is required.")
+                    return
+                merge_theme = merge_new_theme.strip() or merge_theme_choice
+                if merge_theme == "":
+                    st.error("Theme is required.")
+                    return
+
+                merge_evaluation_value = merge_evaluation_choice or None
+                merge_team_value = merge_team or None
+                merge_sprint_value = merge_sprint or None
+                merge_sub_task_value = merge_sub_task.strip() or None
+                merge_lob_value = merge_lob.strip() or None
+                merge_estimation_value = int(merge_estimation)
+                image_bytes = primary_row["image_blob"]
+                if isinstance(image_bytes, memoryview):
+                    image_bytes = image_bytes.tobytes()
+
+                with get_conn() as conn:
+                    insert_theme(conn, merge_theme.strip())
+                    conn.execute(
+                        """
+                        UPDATE backlog
+                        SET task = ?, sub_task = ?, lob = ?, image_blob = ?, theme = ?, evaluation = ?, estimation = ?, team = ?, sprint = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            merge_task.strip(),
+                            merge_sub_task_value,
+                            merge_lob_value,
+                            image_bytes,
+                            merge_theme.strip(),
+                            merge_evaluation_value,
+                            merge_estimation_value,
+                            merge_team_value,
+                            merge_sprint_value,
+                            primary_row["id"],
+                        ),
+                    )
+
+                    dependency_ids = [
+                        dependency_choices[label]
+                        for label in merge_selected_dependency_labels
+                    ]
+                    upsert_backlog_dependencies(conn, primary_row["id"], dependency_ids)
+
+                    delete_ids = [
+                        row["id"] for row in selected_rows if row["id"] != primary_row["id"]
+                    ]
+                    if delete_ids:
+                        placeholders = ",".join(["?"] * len(delete_ids))
+                        conn.execute(
+                            f"DELETE FROM backlog WHERE id IN ({placeholders})",
+                            tuple(delete_ids),
+                        )
+
+                st.success("Backlogs merged.")
+                st.session_state.pop("selected_backlog_ids", None)
+                st.rerun()
+
     @st.dialog("Split backlog")
     def split_backlog_dialog(backlog_row):
         current_dep_ids = fetch_backlog_dependency_ids(backlog_row["id"])
@@ -1180,7 +1362,7 @@ if tab_choice == "Backlog":
     else:
         st.caption("Selected: none")
 
-    action_cols = st.columns(4, gap="small")
+    action_cols = st.columns(5, gap="small")
     with action_cols[0]:
         if st.button("Add backlog"):
             st.session_state.pop("add_backlog_image_paste_data", None)
@@ -1197,6 +1379,10 @@ if tab_choice == "Backlog":
         if st.button("Split selected backlog", disabled=split_disabled):
             split_backlog_dialog(selected_backlog)
     with action_cols[3]:
+        merge_disabled = len(selected_ids) < 2
+        if st.button("Merge selected backlogs", disabled=merge_disabled):
+            merge_backlog_dialog(selected_ids, backlog_by_id)
+    with action_cols[4]:
         delete_disabled = not selected_ids
         if st.button("Delete selected backlog", disabled=delete_disabled):
             delete_backlog_dialog(selected_ids, backlog_by_id)
@@ -1204,7 +1390,7 @@ if tab_choice == "Backlog":
     if backlog_rows and not selected_ids:
         st.info("Select backlog items from the list to edit or delete.")
     elif backlog_rows and len(selected_ids) > 1:
-        st.info("Multiple items selected. Edit/Split are disabled; Delete is enabled.")
+        st.info("Multiple items selected. Edit/Split are disabled; Merge/Delete are enabled.")
 
 if tab_choice == "Dependencies":
     dependency_rows = fetch_dependencies()
