@@ -9,7 +9,7 @@ import streamlit.components.v1 as components
 
 DB_PATH = "backlog.db"
 BACKLOG_TEAMS = ["Team 1", "Team 2"]
-DEPENDENCY_TEAMS = ["PC", "BC", "CC", "Integration", "Auth"]
+DEPENDENCY_TEAMS = ["PC", "BC", "CC", "Integration", "Auth", "Digital"]
 SPRINTS = [f"Sprint {i}" for i in range(1, 12)]
 
 
