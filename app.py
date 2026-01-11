@@ -266,7 +266,7 @@ def fetch_backlogs():
                 b.estimation,
                 b.team,
                 b.sprint,
-                GROUP_CONCAT(d.task, ', ') AS dependency_names
+                COUNT(d.id) AS dependency_count
             FROM backlog b
             LEFT JOIN backlog_dependency bd ON b.id = bd.backlog_id
             LEFT JOIN dependency d ON d.id = bd.dependency_id
