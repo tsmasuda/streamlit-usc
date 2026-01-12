@@ -29,7 +29,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS backlog (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 task TEXT NOT NULL,
-                sub_task TEXT,
+                task_details TEXT,
                 lob TEXT,
                 image_blob BLOB,
                 theme TEXT NOT NULL,
@@ -63,6 +63,21 @@ def init_db():
                 PRIMARY KEY (backlog_id, dependency_id),
                 FOREIGN KEY (backlog_id) REFERENCES backlog(id) ON DELETE CASCADE,
                 FOREIGN KEY (dependency_id) REFERENCES dependency(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS sub_backlog (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                backlog_id INTEGER,
+                title TEXT NOT NULL,
+                note TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS sub_backlog_backlog (
+                sub_backlog_id INTEGER NOT NULL,
+                backlog_id INTEGER NOT NULL,
+                PRIMARY KEY (sub_backlog_id, backlog_id),
+                FOREIGN KEY (sub_backlog_id) REFERENCES sub_backlog(id) ON DELETE CASCADE,
+                FOREIGN KEY (backlog_id) REFERENCES backlog(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS meeting (
@@ -116,11 +131,24 @@ def init_db():
         )
         backlog_info = conn.execute("PRAGMA table_info(backlog)").fetchall()
         backlog_columns = [row["name"] for row in backlog_info]
-        sub_task_info = next((row for row in backlog_info if row["name"] == "sub_task"), None)
+        sub_task_info = next(
+            (row for row in backlog_info if row["name"] == "task_details"),
+            None,
+        )
         if "task" not in backlog_columns:
             conn.execute("ALTER TABLE backlog ADD COLUMN task TEXT NOT NULL DEFAULT ''")
-        if "sub_task" not in backlog_columns:
-            conn.execute("ALTER TABLE backlog ADD COLUMN sub_task TEXT")
+        if "task_details" not in backlog_columns:
+            conn.execute("ALTER TABLE backlog ADD COLUMN task_details TEXT")
+            if "sub_task" in backlog_columns:
+                conn.execute(
+                    """
+                    UPDATE backlog
+                    SET task_details = sub_task
+                    WHERE (task_details IS NULL OR TRIM(task_details) = '')
+                        AND sub_task IS NOT NULL
+                        AND TRIM(sub_task) != ''
+                    """
+                )
         if "lob" not in backlog_columns:
             conn.execute("ALTER TABLE backlog ADD COLUMN lob TEXT")
         if "image_blob" not in backlog_columns:
@@ -133,7 +161,7 @@ def init_db():
                 CREATE TABLE backlog_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task TEXT NOT NULL,
-                    sub_task TEXT,
+                    task_details TEXT,
                     lob TEXT,
                     image_blob BLOB,
                     theme TEXT NOT NULL,
@@ -142,8 +170,8 @@ def init_db():
                     team TEXT,
                     sprint TEXT
                 );
-                INSERT INTO backlog_new (id, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint)
-                SELECT id, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint FROM backlog;
+                INSERT INTO backlog_new (id, task, task_details, lob, image_blob, theme, evaluation, estimation, team, sprint)
+                SELECT id, task, task_details, lob, image_blob, theme, evaluation, estimation, team, sprint FROM backlog;
                 DROP TABLE backlog;
                 ALTER TABLE backlog_new RENAME TO backlog;
                 """
@@ -163,7 +191,7 @@ def init_db():
                 CREATE TABLE backlog_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task TEXT NOT NULL,
-                    sub_task TEXT,
+                    task_details TEXT,
                     lob TEXT,
                     image_blob BLOB,
                     theme TEXT NOT NULL,
@@ -172,8 +200,8 @@ def init_db():
                     team TEXT,
                     sprint TEXT
                 );
-                INSERT INTO backlog_new (id, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint)
-                SELECT id, task, sub_task, lob, image_blob, theme, evaluation, CAST(estimation AS INTEGER), team, sprint FROM backlog;
+                INSERT INTO backlog_new (id, task, task_details, lob, image_blob, theme, evaluation, estimation, team, sprint)
+                SELECT id, task, task_details, lob, image_blob, theme, evaluation, CAST(estimation AS INTEGER), team, sprint FROM backlog;
                 DROP TABLE backlog;
                 ALTER TABLE backlog_new RENAME TO backlog;
                 """
@@ -181,7 +209,10 @@ def init_db():
         backlog_info = conn.execute("PRAGMA table_info(backlog)").fetchall()
         team_info = next((row for row in backlog_info if row["name"] == "team"), None)
         sprint_info = next((row for row in backlog_info if row["name"] == "sprint"), None)
-        sub_task_info = next((row for row in backlog_info if row["name"] == "sub_task"), None)
+        sub_task_info = next(
+            (row for row in backlog_info if row["name"] == "task_details"),
+            None,
+        )
         estimation_info = next(
             (row for row in backlog_info if row["name"] == "estimation"), None
         )
@@ -197,7 +228,7 @@ def init_db():
                 CREATE TABLE backlog_new (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     task TEXT NOT NULL,
-                    sub_task TEXT,
+                    task_details TEXT,
                     lob TEXT,
                     image_blob BLOB,
                     theme TEXT NOT NULL,
@@ -206,8 +237,8 @@ def init_db():
                     team TEXT,
                     sprint TEXT
                 );
-                INSERT INTO backlog_new (id, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint)
-                SELECT id, task, sub_task, lob, image_blob, theme, evaluation, CAST(estimation AS INTEGER), team, sprint FROM backlog;
+                INSERT INTO backlog_new (id, task, task_details, lob, image_blob, theme, evaluation, estimation, team, sprint)
+                SELECT id, task, task_details, lob, image_blob, theme, evaluation, CAST(estimation AS INTEGER), team, sprint FROM backlog;
                 DROP TABLE backlog;
                 ALTER TABLE backlog_new RENAME TO backlog;
                 """
@@ -242,6 +273,51 @@ def init_db():
         evaluation_columns = [row["name"] for row in evaluation_info]
         if "note" not in evaluation_columns:
             conn.execute("ALTER TABLE evaluation ADD COLUMN note TEXT")
+
+        legacy_sub_task = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sub_task'"
+        ).fetchone()
+        sub_backlog_exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='sub_backlog'"
+        ).fetchone()
+        if legacy_sub_task and not sub_backlog_exists:
+            conn.execute("ALTER TABLE sub_task RENAME TO sub_backlog")
+
+        sub_backlog_info = conn.execute("PRAGMA table_info(sub_backlog)").fetchall()
+        sub_backlog_columns = [row["name"] for row in sub_backlog_info]
+        if "backlog_id" not in sub_backlog_columns:
+            conn.execute("ALTER TABLE sub_backlog ADD COLUMN backlog_id INTEGER")
+        if "title" not in sub_backlog_columns:
+            conn.execute(
+                "ALTER TABLE sub_backlog ADD COLUMN title TEXT NOT NULL DEFAULT ''"
+            )
+        if "note" not in sub_backlog_columns:
+            conn.execute("ALTER TABLE sub_backlog ADD COLUMN note TEXT")
+
+        sub_backlog_backlog_info = conn.execute(
+            "PRAGMA table_info(sub_backlog_backlog)"
+        ).fetchall()
+        if not sub_backlog_backlog_info:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS sub_backlog_backlog (
+                    sub_backlog_id INTEGER NOT NULL,
+                    backlog_id INTEGER NOT NULL,
+                    PRIMARY KEY (sub_backlog_id, backlog_id),
+                    FOREIGN KEY (sub_backlog_id) REFERENCES sub_backlog(id) ON DELETE CASCADE,
+                    FOREIGN KEY (backlog_id) REFERENCES backlog(id) ON DELETE CASCADE
+                )
+                """
+            )
+        if "backlog_id" in sub_backlog_columns:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO sub_backlog_backlog (sub_backlog_id, backlog_id)
+                SELECT id, backlog_id
+                FROM sub_backlog
+                WHERE backlog_id IS NOT NULL
+                """
+            )
 
         meeting_note_info = conn.execute("PRAGMA table_info(meeting_note)").fetchall()
         meeting_note_columns = [row["name"] for row in meeting_note_info]
@@ -347,7 +423,7 @@ def fetch_backlogs():
             SELECT
                 b.id,
                 b.task,
-                b.sub_task,
+                b.task_details,
                 b.lob,
                 b.image_blob,
                 b.theme,
@@ -382,7 +458,7 @@ def fetch_backlogs_for_dependency(dependency_id):
             SELECT
                 b.id,
                 b.task,
-                b.sub_task,
+                b.task_details,
                 b.theme,
                 b.evaluation,
                 b.estimation,
@@ -398,6 +474,25 @@ def fetch_backlogs_for_dependency(dependency_id):
     return rows
 
 
+def fetch_sub_backlogs():
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                st.id,
+                st.title,
+                st.note,
+                GROUP_CONCAT(b.task, ' | ') AS backlog_tasks
+            FROM sub_backlog st
+            LEFT JOIN sub_backlog_backlog sbb ON sbb.sub_backlog_id = st.id
+            LEFT JOIN backlog b ON b.id = sbb.backlog_id
+            GROUP BY st.id, st.title, st.note
+            ORDER BY st.id
+            """
+        ).fetchall()
+    return rows
+
+
 def fetch_backlog_dependency_rows():
     with get_conn() as conn:
         rows = conn.execute(
@@ -405,7 +500,7 @@ def fetch_backlog_dependency_rows():
             SELECT
                 b.id AS backlog_id,
                 b.task AS backlog_task,
-                b.sub_task AS backlog_sub_task,
+                b.task_details AS backlog_task_details,
                 b.theme AS backlog_theme,
                 b.evaluation AS backlog_evaluation,
                 b.team AS backlog_team,
@@ -421,6 +516,48 @@ def fetch_backlog_dependency_rows():
             """
         ).fetchall()
     return rows
+
+
+def fetch_backlog_sub_backlog_rows():
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                b.id AS backlog_id,
+                b.task AS backlog_task,
+                b.task_details AS backlog_task_details,
+                b.theme AS backlog_theme,
+                b.evaluation AS backlog_evaluation,
+                b.team AS backlog_team,
+                b.sprint AS backlog_sprint,
+                sb.id AS sub_backlog_id,
+                sb.title AS sub_backlog_title,
+                sb.note AS sub_backlog_note
+            FROM backlog b
+            INNER JOIN sub_backlog_backlog sbb ON b.id = sbb.backlog_id
+            INNER JOIN sub_backlog sb ON sb.id = sbb.sub_backlog_id
+            ORDER BY b.id, sb.id
+            """
+        ).fetchall()
+    return rows
+
+
+def fetch_sub_backlog_ids_for_backlog(backlog_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT sub_backlog_id FROM sub_backlog_backlog WHERE backlog_id = ?",
+            (backlog_id,),
+        ).fetchall()
+    return [row["sub_backlog_id"] for row in rows]
+
+
+def fetch_backlog_ids_for_sub_backlog(sub_backlog_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT backlog_id FROM sub_backlog_backlog WHERE sub_backlog_id = ?",
+            (sub_backlog_id,),
+        ).fetchall()
+    return [row["backlog_id"] for row in rows]
 
 
 def fetch_meeting_note_backlog_ids(meeting_note_id):
@@ -501,6 +638,44 @@ def insert_meeting(conn, title, meeting_datetime):
     return cursor.lastrowid
 
 
+def insert_sub_backlog(conn, title, note):
+    cursor = conn.execute(
+        "INSERT INTO sub_backlog (title, note) VALUES (?, ?)",
+        (title, note),
+    )
+    return cursor.lastrowid
+
+
+def upsert_sub_backlog_backlogs(conn, sub_backlog_id, backlog_ids):
+    conn.execute(
+        "DELETE FROM sub_backlog_backlog WHERE sub_backlog_id = ?",
+        (sub_backlog_id,),
+    )
+    for backlog_id in backlog_ids:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO sub_backlog_backlog (sub_backlog_id, backlog_id)
+            VALUES (?, ?)
+            """,
+            (sub_backlog_id, backlog_id),
+        )
+
+
+def upsert_backlog_sub_backlogs(conn, backlog_id, sub_backlog_ids):
+    conn.execute(
+        "DELETE FROM sub_backlog_backlog WHERE backlog_id = ?",
+        (backlog_id,),
+    )
+    for sub_backlog_id in sub_backlog_ids:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO sub_backlog_backlog (sub_backlog_id, backlog_id)
+            VALUES (?, ?)
+            """,
+            (sub_backlog_id, backlog_id),
+        )
+
+
 def upsert_meeting_note_backlogs(conn, meeting_note_id, backlog_ids):
     conn.execute(
         "DELETE FROM meeting_note_backlog WHERE meeting_note_id = ?",
@@ -550,14 +725,33 @@ def upsert_meeting_note_evaluations(conn, meeting_note_id, evaluation_ids):
 
 
 def insert_backlog(
-    conn, task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint
+    conn,
+    task,
+    task_details,
+    lob,
+    image_blob,
+    theme,
+    evaluation,
+    estimation,
+    team,
+    sprint,
 ):
     cursor = conn.execute(
         """
-        INSERT INTO backlog (task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint)
+        INSERT INTO backlog (task, task_details, lob, image_blob, theme, evaluation, estimation, team, sprint)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (task, sub_task, lob, image_blob, theme, evaluation, estimation, team, sprint),
+        (
+            task,
+            task_details,
+            lob,
+            image_blob,
+            theme,
+            evaluation,
+            estimation,
+            team,
+            sprint,
+        ),
     )
     return cursor.lastrowid
 
@@ -615,7 +809,7 @@ def backlog_label(backlog_row):
     team_display = backlog_row["team"] or "-"
     sprint_display = backlog_row["sprint"] or "-"
     return (
-        f"{backlog_row['id']}: {backlog_row['task']} / {backlog_row['sub_task'] or ''} "
+        f"{backlog_row['id']}: {backlog_row['task']} / {backlog_row['task_details'] or ''} "
         f"(est {estimation_display}, {team_display}, {sprint_display})"
     )
 
@@ -660,14 +854,16 @@ st.markdown(
 tab_choice = st.radio(
     "View",
     [
-        "Backlog",
-        "Dependencies",
-        "Backlog x Dependencies",
-        "Themes",
-        "Evaluations",
-        "Meetings",
         "Meeting Notes",
+        "Meetings",
+        "Themes",
+        "Backlog",
+        "Sub-backlogs",
+        "Evaluations",
+        "Dependencies",
         "Sprint x Team",
+        "Backlog x Dependencies",
+        "Backlog x Sub-backlogs",
     ],
     horizontal=True,
     key="active_tab",
@@ -680,6 +876,11 @@ if tab_choice == "Backlog":
     dependency_rows = fetch_dependencies()
     dependency_choices = {dependency_label(row): row["id"] for row in dependency_rows}
     existing_dependency_labels = list(dependency_choices.keys())
+    sub_backlog_rows = fetch_sub_backlogs()
+    sub_backlog_choices = {
+        f"{row['title']} (#{row['id']})": row["id"] for row in sub_backlog_rows
+    }
+    existing_sub_backlog_labels = list(sub_backlog_choices.keys())
     backlog_rows = fetch_backlogs()
     dependency_df = (
         pd.DataFrame([dict(row) for row in dependency_rows])
@@ -696,6 +897,14 @@ if tab_choice == "Backlog":
             value=0,
             step=1,
             key="add_dep_count",
+        )
+        add_new_sub_backlog_count = st.number_input(
+            "New sub-backlog count",
+            min_value=0,
+            max_value=10,
+            value=0,
+            step=1,
+            key="add_sub_backlog_count",
         )
         with st.form("add_backlog_form"):
             image_col, middle_col, right_col = st.columns(3, gap="large")
@@ -720,7 +929,7 @@ if tab_choice == "Backlog":
                     key="add_evaluation_choice",
                 )
             with right_col:
-                sub_task = st.text_input("Sub-task (optional)")
+                task_details = st.text_input("Task details (optional)")
                 new_theme = st.text_input("New theme (optional)")
                 estimation_input_right = st.number_input(
                     "Estimation",
@@ -735,6 +944,12 @@ if tab_choice == "Backlog":
                 options=existing_dependency_labels,
                 default=[],
                 key="add_existing_deps",
+            )
+            selected_sub_backlog_labels = st.multiselect(
+                "Assign existing sub-backlogs",
+                options=existing_sub_backlog_labels,
+                default=[],
+                key="add_existing_sub_backlogs",
             )
 
             new_dependencies = []
@@ -759,6 +974,23 @@ if tab_choice == "Backlog":
                     )
                 new_dependencies.append((dep_task, dep_sub_task, dep_team))
 
+            new_sub_backlogs = []
+            for i in range(add_new_sub_backlog_count):
+                st.markdown(f"New sub-backlog {i + 1}")
+                title_col, note_col = st.columns(2, gap="large")
+                with title_col:
+                    title = st.text_input(
+                        f"Sub-backlog title {i + 1}",
+                        key=f"add_sub_backlog_title_{i}",
+                    )
+                with note_col:
+                    note = st.text_area(
+                        f"Sub-backlog note {i + 1} (optional)",
+                        height=80,
+                        key=f"add_sub_backlog_note_{i}",
+                    )
+                new_sub_backlogs.append((title, note))
+
             submitted = st.form_submit_button("Add backlog")
             if submitted:
                 if not task.strip():
@@ -781,14 +1013,14 @@ if tab_choice == "Backlog":
                     sprint_value = sprint or None
                     image_bytes = pasted_image
                     estimation_value = int(estimation_input_right)
-                    sub_task_value = sub_task.strip() or None
+                    task_details_value = task_details.strip() or None
                     lob_value = lob.strip() or None
                     with get_conn() as conn:
                         insert_theme(conn, theme.strip())
                         backlog_id = insert_backlog(
                             conn,
                             task.strip(),
-                            sub_task_value,
+                            task_details_value,
                             lob_value,
                             image_bytes,
                             theme.strip(),
@@ -814,6 +1046,26 @@ if tab_choice == "Backlog":
 
                         upsert_backlog_dependencies(conn, backlog_id, dependency_ids)
 
+                        if selected_sub_backlog_labels:
+                            sub_backlog_ids = [
+                                sub_backlog_choices[label]
+                                for label in selected_sub_backlog_labels
+                            ]
+                            upsert_backlog_sub_backlogs(
+                                conn, backlog_id, sub_backlog_ids
+                            )
+
+                        for title, note in new_sub_backlogs:
+                            if title.strip():
+                                sub_backlog_id = insert_sub_backlog(
+                                    conn,
+                                    title.strip(),
+                                    note.strip() or None,
+                                )
+                                upsert_sub_backlog_backlogs(
+                                    conn, sub_backlog_id, [backlog_id]
+                                )
+
                     st.success("Backlog added.")
                     st.session_state.pop("add_backlog_image_paste", None)
                     st.session_state.pop("selected_backlog_ids", None)
@@ -828,6 +1080,14 @@ if tab_choice == "Backlog":
             value=0,
             step=1,
             key="edit_dep_count",
+        )
+        edit_new_sub_backlog_count = st.number_input(
+            "New sub-backlog count (edit)",
+            min_value=0,
+            max_value=10,
+            value=0,
+            step=1,
+            key="edit_sub_backlog_count",
         )
         selected_dep_ids = fetch_backlog_dependency_ids(backlog_row["id"])
         selected_dep_labels = [
@@ -892,9 +1152,9 @@ if tab_choice == "Backlog":
                     key="edit_evaluation_choice",
                 )
             with right_col:
-                edit_sub_task = st.text_input(
-                    "Sub-task (optional)",
-                    value=backlog_row["sub_task"] or "",
+                edit_task_details = st.text_input(
+                    "Task details (optional)",
+                    value=backlog_row["task_details"] or "",
                 )
                 edit_new_theme = st.text_input("New theme (optional)")
                 estimation_default = (
@@ -925,6 +1185,18 @@ if tab_choice == "Backlog":
                 default=default_dependency_labels,
                 key="edit_existing_deps",
             )
+            linked_sub_backlog_ids = fetch_sub_backlog_ids_for_backlog(backlog_row["id"])
+            default_sub_backlog_labels = [
+                label
+                for label, sub_id in sub_backlog_choices.items()
+                if sub_id in linked_sub_backlog_ids
+            ]
+            edit_selected_sub_backlog_labels = st.multiselect(
+                "Assign existing sub-backlogs",
+                options=existing_sub_backlog_labels,
+                default=default_sub_backlog_labels,
+                key="edit_existing_sub_backlogs",
+            )
 
             edit_new_dependencies = []
             for i in range(edit_new_dep_count):
@@ -947,6 +1219,23 @@ if tab_choice == "Backlog":
                         key=f"edit_dep_sub_task_{i}",
                     )
                 edit_new_dependencies.append((dep_task, dep_sub_task, dep_team))
+
+            edit_new_sub_backlogs = []
+            for i in range(edit_new_sub_backlog_count):
+                st.markdown(f"New sub-backlog {i + 1}")
+                title_col, note_col = st.columns(2, gap="large")
+                with title_col:
+                    title = st.text_input(
+                        f"Sub-backlog title {i + 1}",
+                        key=f"edit_sub_backlog_title_{i}",
+                    )
+                with note_col:
+                    note = st.text_area(
+                        f"Sub-backlog note {i + 1} (optional)",
+                        height=80,
+                        key=f"edit_sub_backlog_note_{i}",
+                    )
+                edit_new_sub_backlogs.append((title, note))
 
             linked_dependencies = [
                 row for row in dependency_rows if row["id"] in selected_dep_ids
@@ -993,19 +1282,19 @@ if tab_choice == "Backlog":
                         if isinstance(image_bytes, memoryview):
                             image_bytes = image_bytes.tobytes()
                     edit_estimation_value = int(edit_estimation_input)
-                    edit_sub_task_value = edit_sub_task.strip() or None
+                    edit_task_details_value = edit_task_details.strip() or None
                     edit_lob_value = edit_lob.strip() or None
                     with get_conn() as conn:
                         insert_theme(conn, edit_theme.strip())
                         conn.execute(
                             """
                             UPDATE backlog
-                            SET task = ?, sub_task = ?, lob = ?, image_blob = ?, theme = ?, evaluation = ?, estimation = ?, team = ?, sprint = ?
+                            SET task = ?, task_details = ?, lob = ?, image_blob = ?, theme = ?, evaluation = ?, estimation = ?, team = ?, sprint = ?
                             WHERE id = ?
                             """,
                             (
                                 edit_task.strip(),
-                                edit_sub_task_value,
+                                edit_task_details_value,
                                 edit_lob_value,
                                 image_bytes,
                                 edit_theme.strip(),
@@ -1033,6 +1322,25 @@ if tab_choice == "Backlog":
 
                         upsert_backlog_dependencies(conn, backlog_row["id"], dependency_ids)
 
+                        sub_backlog_ids = [
+                            sub_backlog_choices[label]
+                            for label in edit_selected_sub_backlog_labels
+                        ]
+                        upsert_backlog_sub_backlogs(
+                            conn, backlog_row["id"], sub_backlog_ids
+                        )
+
+                        for title, note in edit_new_sub_backlogs:
+                            if title.strip():
+                                sub_backlog_id = insert_sub_backlog(
+                                    conn,
+                                    title.strip(),
+                                    note.strip() or None,
+                                )
+                                upsert_sub_backlog_backlogs(
+                                    conn, sub_backlog_id, [backlog_row["id"]]
+                                )
+
                     st.success("Backlog updated.")
                     st.session_state.pop("edit_backlog_image_paste", None)
                     st.rerun()
@@ -1043,7 +1351,7 @@ if tab_choice == "Backlog":
         for item_id in selected_ids:
             row = backlog_lookup.get(item_id)
             if row:
-                items.append(f"{row['task']} / {row['sub_task'] or ''}")
+                items.append(f"{row['task']} / {row['task_details'] or ''}")
         st.write(f"Delete {len(selected_ids)} backlog item(s)?")
         if items:
             st.write(items)
@@ -1146,10 +1454,10 @@ if tab_choice == "Backlog":
                     key=f"merge_evaluation_choice_{primary_id}",
                 )
             with merge_col_mid:
-                merge_sub_task = st.text_input(
-                    "Sub-task (optional)",
-                    value=primary_row["sub_task"] or "",
-                    key=f"merge_sub_task_{primary_id}",
+                merge_task_details = st.text_input(
+                    "Task details (optional)",
+                    value=primary_row["task_details"] or "",
+                    key=f"merge_task_details_{primary_id}",
                 )
                 merge_new_theme = st.text_input(
                     "New theme (optional)",
@@ -1191,7 +1499,7 @@ if tab_choice == "Backlog":
                 merge_evaluation_value = merge_evaluation_choice or None
                 merge_team_value = merge_team or None
                 merge_sprint_value = merge_sprint or None
-                merge_sub_task_value = merge_sub_task.strip() or None
+                merge_task_details_value = merge_task_details.strip() or None
                 merge_lob_value = merge_lob.strip() or None
                 merge_estimation_value = int(merge_estimation)
                 image_bytes = primary_row["image_blob"]
@@ -1203,12 +1511,12 @@ if tab_choice == "Backlog":
                     conn.execute(
                         """
                         UPDATE backlog
-                        SET task = ?, sub_task = ?, lob = ?, image_blob = ?, theme = ?, evaluation = ?, estimation = ?, team = ?, sprint = ?
+                        SET task = ?, task_details = ?, lob = ?, image_blob = ?, theme = ?, evaluation = ?, estimation = ?, team = ?, sprint = ?
                         WHERE id = ?
                         """,
                         (
                             merge_task.strip(),
-                            merge_sub_task_value,
+                            merge_task_details_value,
                             merge_lob_value,
                             image_bytes,
                             merge_theme.strip(),
@@ -1271,23 +1579,23 @@ if tab_choice == "Backlog":
             split_items = []
             for i in range(split_count):
                 st.markdown(f"Split item {i + 1}")
-                task_col, sub_task_col, est_col = st.columns(3, gap="large")
+                task_col, task_details_col, est_col = st.columns(3, gap="large")
                 with task_col:
                     item_task = st.text_input(
                         f"Task {i + 1}",
                         value=backlog_row["task"],
                         key=f"split_task_dialog_{i}",
                     )
-                default_sub_task = backlog_row["sub_task"]
-                if default_sub_task:
-                    default_sub_task = f"{default_sub_task} ({i + 1})"
+                default_task_details = backlog_row["task_details"]
+                if default_task_details:
+                    default_task_details = f"{default_task_details} ({i + 1})"
                 else:
-                    default_sub_task = f"Part {i + 1}"
-                with sub_task_col:
-                    item_sub_task = st.text_input(
-                        f"Sub-task {i + 1} (optional)",
-                        value=default_sub_task,
-                        key=f"split_sub_task_dialog_{i}",
+                    default_task_details = f"Part {i + 1}"
+                with task_details_col:
+                    item_task_details = st.text_input(
+                        f"Task details {i + 1} (optional)",
+                        value=default_task_details,
+                        key=f"split_task_details_dialog_{i}",
                     )
                 with est_col:
                     item_estimation = st.number_input(
@@ -1296,7 +1604,7 @@ if tab_choice == "Backlog":
                         step=1,
                         key=f"split_est_dialog_{i}",
                     )
-                split_items.append((item_task, item_sub_task, item_estimation))
+                split_items.append((item_task, item_task_details, item_estimation))
 
             split_submit = st.form_submit_button("Split backlog")
             if split_submit:
@@ -1320,11 +1628,11 @@ if tab_choice == "Backlog":
                         image_bytes = backlog_row["image_blob"]
                         if isinstance(image_bytes, memoryview):
                             image_bytes = image_bytes.tobytes()
-                        for item_task, item_sub_task, item_estimation in split_items:
+                        for item_task, item_task_details, item_estimation in split_items:
                             new_id = insert_backlog(
                                 conn,
                                 item_task.strip(),
-                                item_sub_task.strip(),
+                                item_task_details.strip(),
                                 backlog_row["lob"],
                                 image_bytes,
                                 backlog_row["theme"],
@@ -1374,10 +1682,10 @@ if tab_choice == "Backlog":
                     columns,
                     key="map_backlog_task",
                 )
-                map_sub_task = st.selectbox(
-                    "Map: sub_task (optional)",
+                map_task_details = st.selectbox(
+                    "Map: task_details (optional)",
                     columns,
-                    key="map_backlog_sub_task",
+                    key="map_backlog_task_details",
                 )
                 map_lob = st.selectbox(
                     "Map: lob (optional)",
@@ -1447,7 +1755,7 @@ if tab_choice == "Backlog":
                                     skipped += 1
                                     skip_reasons["missing_theme"] += 1
                                     continue
-                                sub_task_value = get_cell(row, map_sub_task)
+                                task_details_value = get_cell(row, map_task_details)
                                 lob_value = get_cell(row, map_lob)
                                 evaluation_value = get_cell(row, map_evaluation)
                                 team_value = get_cell(row, map_team)
@@ -1465,7 +1773,7 @@ if tab_choice == "Backlog":
                                 insert_backlog(
                                     conn,
                                     task_value,
-                                    sub_task_value,
+                                    task_details_value,
                                     lob_value,
                                     None,
                                     theme_value,
@@ -1493,9 +1801,9 @@ if tab_choice == "Backlog":
             key="backlog_task_filter",
         )
     with backlog_filter_row1[1]:
-        backlog_sub_task_filter = st.text_input(
-            "Sub-task (filter)",
-            key="backlog_sub_task_filter",
+        backlog_task_details_filter = st.text_input(
+            "Task details (filter)",
+            key="backlog_task_details_filter",
         )
     with backlog_filter_row1[2]:
         backlog_lob_filter = st.text_input(
@@ -1535,7 +1843,7 @@ if tab_choice == "Backlog":
         backlog_search = st.text_input(
             "Search",
             key="backlog_search",
-            help="Filter by task/sub-task/lob/theme/evaluation",
+            help="Filter by task/task details/lob/theme/evaluation",
         )
     if backlog_rows:
         backlog_df = pd.DataFrame([dict(row) for row in backlog_rows])
@@ -1547,10 +1855,10 @@ if tab_choice == "Backlog":
                 .fillna("")
                 .str.contains(query, case=False, na=False)
             ]
-        if backlog_sub_task_filter.strip():
-            query = backlog_sub_task_filter.strip()
+        if backlog_task_details_filter.strip():
+            query = backlog_task_details_filter.strip()
             filtered_backlog_df = filtered_backlog_df[
-                filtered_backlog_df["sub_task"]
+                filtered_backlog_df["task_details"]
                 .fillna("")
                 .str.contains(query, case=False, na=False)
             ]
@@ -1580,7 +1888,7 @@ if tab_choice == "Backlog":
         if backlog_search.strip():
             query = backlog_search.strip().lower()
             searchable = (
-                filtered_backlog_df[["task", "sub_task", "lob", "theme", "evaluation"]]
+                filtered_backlog_df[["task", "task_details", "lob", "theme", "evaluation"]]
                 .fillna("")
                 .agg(" ".join, axis=1)
                 .str.lower()
@@ -2012,6 +2320,142 @@ if tab_choice == "Backlog x Dependencies":
         st.dataframe(join_df, width="stretch")
     else:
         st.info("No backlog/dependency links yet.")
+
+if tab_choice == "Backlog x Sub-backlogs":
+    st.subheader("Backlog x Sub-backlogs")
+    join_rows = fetch_backlog_sub_backlog_rows()
+    if join_rows:
+        join_df = pd.DataFrame([dict(row) for row in join_rows])
+        st.dataframe(join_df, width="stretch")
+    else:
+        st.info("No backlog/sub-backlog links yet.")
+
+if tab_choice == "Sub-backlogs":
+    backlog_rows = fetch_backlogs()
+    sub_backlog_rows = fetch_sub_backlogs()
+    backlog_choices = {backlog_label(row): row["id"] for row in backlog_rows}
+    backlog_labels = list(backlog_choices.keys())
+
+    @st.dialog("Add sub-backlog")
+    def add_sub_backlog_dialog():
+        with st.form("add_sub_backlog_form"):
+            title = st.text_input("Title")
+            note = st.text_area("Note (optional)", height=120)
+            submitted = st.form_submit_button("Add sub-backlog")
+            if submitted:
+                if not title.strip():
+                    st.error("Sub-backlog title is required.")
+                else:
+                    with get_conn() as conn:
+                        sub_backlog_id = insert_sub_backlog(
+                            conn,
+                            title.strip(),
+                            note.strip() or None,
+                        )
+                    st.success("Sub-backlog added.")
+                    st.rerun()
+
+    @st.dialog("Edit sub-backlog")
+    def edit_sub_backlog_dialog(sub_backlog_row):
+        with st.form("edit_sub_backlog_form"):
+            title = st.text_input("Title", value=sub_backlog_row["title"])
+            note = st.text_area(
+                "Note (optional)",
+                value=sub_backlog_row["note"] or "",
+                height=120,
+            )
+            submitted = st.form_submit_button("Update sub-backlog")
+            if submitted:
+                if not title.strip():
+                    st.error("Sub-backlog title is required.")
+                else:
+                    with get_conn() as conn:
+                        conn.execute(
+                            """
+                            UPDATE sub_backlog
+                            SET title = ?, note = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                title.strip(),
+                                note.strip() or None,
+                                sub_backlog_row["id"],
+                            ),
+                        )
+                    st.success("Sub-backlog updated.")
+                    st.rerun()
+
+    @st.dialog("Delete sub-backlog")
+    def delete_sub_backlog_dialog(selected_ids, sub_backlog_lookup):
+        items = []
+        for item_id in selected_ids:
+            row = sub_backlog_lookup.get(item_id)
+            if row:
+                items.append(row["title"])
+        st.write(f"Delete {len(selected_ids)} sub-backlog item(s)?")
+        if items:
+            st.write(items)
+        if st.button("Confirm delete", type="primary"):
+            placeholders = ",".join(["?"] * len(selected_ids))
+            with get_conn() as conn:
+                conn.execute(
+                    f"DELETE FROM sub_backlog WHERE id IN ({placeholders})",
+                    tuple(selected_ids),
+                )
+            st.success("Sub-backlog deleted.")
+            st.rerun()
+
+    st.subheader("Sub-backlog list")
+    if sub_backlog_rows:
+        sub_backlog_df = pd.DataFrame([dict(row) for row in sub_backlog_rows])
+        selection = st.dataframe(
+            sub_backlog_df,
+            width="stretch",
+            on_select="rerun",
+            selection_mode="multi-row",
+        )
+        if selection and selection.selection.rows:
+            selected_ids = [
+                int(sub_backlog_df.iloc[index]["id"])
+                for index in selection.selection.rows
+            ]
+            st.session_state["selected_sub_backlog_ids"] = selected_ids
+        else:
+            st.session_state.pop("selected_sub_backlog_ids", None)
+    else:
+        st.info("No sub-backlogs yet.")
+
+    sub_backlog_by_id = {row["id"]: row for row in sub_backlog_rows}
+    selected_ids = st.session_state.get("selected_sub_backlog_ids", [])
+    selected_sub_backlog = (
+        sub_backlog_by_id.get(selected_ids[0]) if len(selected_ids) == 1 else None
+    )
+
+    if selected_ids:
+        if len(selected_ids) == 1 and selected_sub_backlog:
+            st.caption(f"Selected: {selected_sub_backlog['title']}")
+        else:
+            st.caption(f"Selected: {len(selected_ids)} items")
+    else:
+        st.caption("Selected: none")
+
+    action_cols = st.columns(3, gap="small")
+    with action_cols[0]:
+        if st.button("Add sub-backlog"):
+            add_sub_backlog_dialog()
+    with action_cols[1]:
+        edit_disabled = selected_sub_backlog is None
+        if st.button("Edit selected sub-backlog", disabled=edit_disabled):
+            edit_sub_backlog_dialog(selected_sub_backlog)
+    with action_cols[2]:
+        delete_disabled = not selected_ids
+        if st.button("Delete selected sub-backlog", disabled=delete_disabled):
+            delete_sub_backlog_dialog(selected_ids, sub_backlog_by_id)
+
+    if sub_backlog_rows and not selected_ids:
+        st.info("Select sub-backlogs from the list to edit or delete.")
+    elif sub_backlog_rows and len(selected_ids) > 1:
+        st.info("Multiple items selected. Edit is disabled; Delete is enabled.")
 
 if tab_choice == "Themes":
     theme_rows = fetch_theme_rows()
