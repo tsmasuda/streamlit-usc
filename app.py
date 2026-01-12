@@ -65,12 +65,20 @@ def init_db():
                 FOREIGN KEY (dependency_id) REFERENCES dependency(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS meeting (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                meeting_datetime TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS meeting_note (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                meeting_id INTEGER,
                 meeting_date TEXT,
                 topic TEXT,
                 note_type TEXT NOT NULL DEFAULT '',
-                note TEXT NOT NULL
+                note TEXT NOT NULL,
+                FOREIGN KEY (meeting_id) REFERENCES meeting(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS meeting_note_backlog (
@@ -237,6 +245,8 @@ def init_db():
 
         meeting_note_info = conn.execute("PRAGMA table_info(meeting_note)").fetchall()
         meeting_note_columns = [row["name"] for row in meeting_note_info]
+        if "meeting_id" not in meeting_note_columns:
+            conn.execute("ALTER TABLE meeting_note ADD COLUMN meeting_id INTEGER")
         if "meeting_date" not in meeting_note_columns:
             conn.execute("ALTER TABLE meeting_note ADD COLUMN meeting_date TEXT")
         if "topic" not in meeting_note_columns:
@@ -299,12 +309,24 @@ def fetch_meeting_notes():
     with get_conn() as conn:
         rows = conn.execute(
             """
-            SELECT id, meeting_date, topic, note_type, note
+            SELECT id, meeting_id, meeting_date, topic, note_type, note
             FROM meeting_note
             ORDER BY
                 CASE WHEN meeting_date IS NULL OR TRIM(meeting_date) = '' THEN 1 ELSE 0 END,
                 meeting_date DESC,
                 id DESC
+            """
+        ).fetchall()
+    return rows
+
+
+def fetch_meetings():
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, title, meeting_datetime
+            FROM meeting
+            ORDER BY meeting_datetime DESC, id DESC
             """
         ).fetchall()
     return rows
@@ -435,10 +457,21 @@ def insert_evaluation(conn, name, note=None):
     return cursor.lastrowid
 
 
-def insert_meeting_note(conn, meeting_date, topic, note_type, note):
+def insert_meeting_note(conn, meeting_id, meeting_date, topic, note_type, note):
     cursor = conn.execute(
-        "INSERT INTO meeting_note (meeting_date, topic, note_type, note) VALUES (?, ?, ?, ?)",
-        (meeting_date, topic, note_type, note),
+        """
+        INSERT INTO meeting_note (meeting_id, meeting_date, topic, note_type, note)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (meeting_id, meeting_date, topic, note_type, note),
+    )
+    return cursor.lastrowid
+
+
+def insert_meeting(conn, title, meeting_datetime):
+    cursor = conn.execute(
+        "INSERT INTO meeting (title, meeting_datetime) VALUES (?, ?)",
+        (title, meeting_datetime),
     )
     return cursor.lastrowid
 
@@ -516,6 +549,18 @@ def upsert_backlog_dependencies(conn, backlog_id, dependency_ids):
         )
 
 
+def upsert_dependency_backlogs(conn, dependency_id, backlog_ids):
+    conn.execute(
+        "DELETE FROM backlog_dependency WHERE dependency_id = ?",
+        (dependency_id,),
+    )
+    for backlog_id in backlog_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO backlog_dependency (backlog_id, dependency_id) VALUES (?, ?)",
+            (backlog_id, dependency_id),
+        )
+
+
 def dependency_label(dep_row):
     return f"{dep_row['task']} / {dep_row['sub_task'] or ''} [{dep_row['team']}]"
 
@@ -589,7 +634,7 @@ st.markdown(
 
 tab_choice = st.radio(
     "View",
-    ["Backlog", "Dependencies", "Themes", "Evaluations", "Meeting Notes", "Sprint x Team"],
+    ["Backlog", "Dependencies", "Themes", "Evaluations", "Meetings", "Meeting Notes", "Sprint x Team"],
     horizontal=True,
     key="active_tab",
     label_visibility="collapsed",
@@ -1537,6 +1582,44 @@ if tab_choice == "Backlog":
     else:
         st.caption("Selected: none")
 
+    if len(selected_ids) > 1:
+        with st.form("bulk_assign_backlog_dependencies_form"):
+            st.caption("Bulk assign dependencies (replaces existing assignments).")
+            bulk_dependencies = st.multiselect(
+                "Assign dependencies",
+                existing_dependency_labels,
+                key="bulk_backlog_dependencies",
+            )
+            bulk_submit = st.form_submit_button("Apply dependencies")
+            if bulk_submit:
+                dependency_ids = [
+                    dependency_choices[label] for label in bulk_dependencies
+                ]
+                with get_conn() as conn:
+                    for backlog_id in selected_ids:
+                        upsert_backlog_dependencies(conn, backlog_id, dependency_ids)
+                st.success("Dependencies updated.")
+                st.rerun()
+
+        with st.form("bulk_assign_backlog_evaluation_form"):
+            st.caption("Bulk assign evaluation (sets the same value for all selected backlogs).")
+            bulk_evaluation = st.selectbox(
+                "Assign evaluation",
+                [""] + evaluations,
+                key="bulk_backlog_evaluation",
+            )
+            eval_submit = st.form_submit_button("Apply evaluation")
+            if eval_submit:
+                evaluation_value = bulk_evaluation or None
+                with get_conn() as conn:
+                    placeholders = ",".join(["?"] * len(selected_ids))
+                    conn.execute(
+                        f"UPDATE backlog SET evaluation = ? WHERE id IN ({placeholders})",
+                        (evaluation_value, *selected_ids),
+                    )
+                st.success("Evaluation updated.")
+                st.rerun()
+
     action_cols = st.columns(5, gap="small")
     with action_cols[0]:
         if st.button("Add backlog"):
@@ -1569,6 +1652,9 @@ if tab_choice == "Backlog":
 
 if tab_choice == "Dependencies":
     dependency_rows = fetch_dependencies()
+    backlog_rows = fetch_backlogs()
+    backlog_choices = {backlog_label(row): row["id"] for row in backlog_rows}
+    backlog_labels = list(backlog_choices.keys())
 
     @st.dialog("Add dependency")
     def add_dependency_dialog():
@@ -1845,6 +1931,23 @@ if tab_choice == "Dependencies":
     else:
         st.caption("Selected: none")
 
+    if len(selected_ids) > 1:
+        with st.form("bulk_assign_dependency_backlogs_form"):
+            st.caption("Bulk assign backlogs (replaces existing assignments).")
+            bulk_backlogs = st.multiselect(
+                "Assign backlogs",
+                backlog_labels,
+                key="bulk_dependency_backlogs",
+            )
+            bulk_submit = st.form_submit_button("Apply backlogs")
+            if bulk_submit:
+                backlog_ids = [backlog_choices[label] for label in bulk_backlogs]
+                with get_conn() as conn:
+                    for dependency_id in selected_ids:
+                        upsert_dependency_backlogs(conn, dependency_id, backlog_ids)
+                st.success("Backlogs updated.")
+                st.rerun()
+
     action_cols = st.columns(4, gap="small")
     with action_cols[0]:
         if st.button("Add dependency"):
@@ -2111,6 +2214,128 @@ if tab_choice == "Evaluations":
     elif evaluation_rows and len(selected_ids) > 1:
         st.info("Multiple items selected. Edit is disabled; Delete is enabled.")
 
+if tab_choice == "Meetings":
+    meeting_rows = fetch_meetings()
+
+    @st.dialog("Add meeting")
+    def add_meeting_dialog():
+        with st.form("add_meeting_form"):
+            meeting_title = st.text_input("Title")
+            meeting_datetime = st.text_input("Date/Time")
+            submitted = st.form_submit_button("Add meeting")
+            if submitted:
+                if not meeting_title.strip():
+                    st.error("Meeting title is required.")
+                elif not meeting_datetime.strip():
+                    st.error("Meeting date/time is required.")
+                else:
+                    with get_conn() as conn:
+                        insert_meeting(
+                            conn,
+                            meeting_title.strip(),
+                            meeting_datetime.strip(),
+                        )
+                    st.success("Meeting added.")
+                    st.rerun()
+
+    @st.dialog("Edit meeting")
+    def edit_meeting_dialog(meeting_row):
+        with st.form("edit_meeting_form"):
+            new_title = st.text_input("Title", value=meeting_row["title"])
+            new_datetime = st.text_input(
+                "Date/Time",
+                value=meeting_row["meeting_datetime"],
+            )
+            submitted = st.form_submit_button("Update meeting")
+            if submitted:
+                if not new_title.strip():
+                    st.error("Meeting title is required.")
+                elif not new_datetime.strip():
+                    st.error("Meeting date/time is required.")
+                else:
+                    with get_conn() as conn:
+                        conn.execute(
+                            """
+                            UPDATE meeting
+                            SET title = ?, meeting_datetime = ?
+                            WHERE id = ?
+                            """,
+                            (new_title.strip(), new_datetime.strip(), meeting_row["id"]),
+                        )
+                    st.success("Meeting updated.")
+                    st.rerun()
+
+    @st.dialog("Delete meeting")
+    def delete_meeting_dialog(selected_ids, meeting_lookup):
+        items = []
+        for item_id in selected_ids:
+            row = meeting_lookup.get(item_id)
+            if row:
+                items.append(f"{row['meeting_datetime']} | {row['title']}")
+        st.write(f"Delete {len(selected_ids)} meeting item(s)?")
+        if items:
+            st.write(items)
+        if st.button("Confirm delete", type="primary"):
+            placeholders = ",".join(["?"] * len(selected_ids))
+            with get_conn() as conn:
+                conn.execute(
+                    f"DELETE FROM meeting WHERE id IN ({placeholders})",
+                    tuple(selected_ids),
+                )
+            st.success("Meeting deleted.")
+            st.rerun()
+
+    st.subheader("Meeting list")
+    if meeting_rows:
+        meeting_df = pd.DataFrame([dict(row) for row in meeting_rows])
+        selection = st.dataframe(
+            meeting_df,
+            width="stretch",
+            on_select="rerun",
+            selection_mode="multi-row",
+        )
+        if selection and selection.selection.rows:
+            selected_ids = [
+                int(meeting_df.iloc[index]["id"]) for index in selection.selection.rows
+            ]
+            st.session_state["selected_meeting_ids"] = selected_ids
+        else:
+            st.session_state.pop("selected_meeting_ids", None)
+    else:
+        st.info("No meetings yet.")
+
+    meeting_by_id = {row["id"]: row for row in meeting_rows}
+    selected_ids = st.session_state.get("selected_meeting_ids", [])
+    selected_meeting = (
+        meeting_by_id.get(selected_ids[0]) if len(selected_ids) == 1 else None
+    )
+
+    if selected_ids:
+        if len(selected_ids) == 1 and selected_meeting:
+            st.caption(f"Selected: {selected_meeting['title']}")
+        else:
+            st.caption(f"Selected: {len(selected_ids)} items")
+    else:
+        st.caption("Selected: none")
+
+    action_cols = st.columns(3, gap="small")
+    with action_cols[0]:
+        if st.button("Add meeting"):
+            add_meeting_dialog()
+    with action_cols[1]:
+        edit_disabled = selected_meeting is None
+        if st.button("Edit selected meeting", disabled=edit_disabled):
+            edit_meeting_dialog(selected_meeting)
+    with action_cols[2]:
+        delete_disabled = not selected_ids
+        if st.button("Delete selected meeting", disabled=delete_disabled):
+            delete_meeting_dialog(selected_ids, meeting_by_id)
+
+    if meeting_rows and not selected_ids:
+        st.info("Select meetings from the list to edit or delete.")
+    elif meeting_rows and len(selected_ids) > 1:
+        st.info("Multiple items selected. Edit is disabled; Delete is enabled.")
+
 if tab_choice == "Meeting Notes":
     meeting_rows = fetch_meeting_notes()
     note_type_options = ["Todo", "Decision"]
@@ -2118,6 +2343,7 @@ if tab_choice == "Meeting Notes":
     dependency_rows = fetch_dependencies()
     theme_rows = fetch_theme_rows()
     evaluation_rows = fetch_evaluation_rows()
+    meeting_list = fetch_meetings()
 
     backlog_choices = {
         backlog_label(row): row["id"] for row in backlog_rows
@@ -2127,11 +2353,16 @@ if tab_choice == "Meeting Notes":
     }
     theme_choices = {row["name"]: row["id"] for row in theme_rows}
     evaluation_choices = {row["name"]: row["id"] for row in evaluation_rows}
+    meeting_choices = {
+        f"{row['meeting_datetime']} | {row['title']}": row["id"]
+        for row in meeting_list
+    }
 
     backlog_labels = list(backlog_choices.keys())
     dependency_labels = list(dependency_choices.keys())
     theme_labels = list(theme_choices.keys())
     evaluation_labels = list(evaluation_choices.keys())
+    meeting_labels = list(meeting_choices.keys())
 
     @st.dialog("Edit meeting note")
     def edit_meeting_note_dialog(note_row):
@@ -2160,45 +2391,63 @@ if tab_choice == "Meeting Notes":
         ]
 
         with st.form("edit_meeting_note_form"):
-            meeting_date = st.text_input(
-                "Meeting date (optional)",
-                value=note_row["meeting_date"] or "",
+            meeting_selected_label = next(
+                (
+                    label
+                    for label, item_id in meeting_choices.items()
+                    if item_id == note_row["meeting_id"]
+                ),
+                "",
             )
-            topic = st.text_input(
-                "Topic (optional)",
-                value=note_row["topic"] or "",
-            )
-            selected_backlogs = st.multiselect(
-                "Assign to backlogs",
-                backlog_labels,
-                default=backlog_selected_labels,
-            )
-            selected_dependencies = st.multiselect(
-                "Assign to dependencies",
-                dependency_labels,
-                default=dependency_selected_labels,
-            )
-            selected_themes = st.multiselect(
-                "Assign to themes",
-                theme_labels,
-                default=theme_selected_labels,
-            )
-            selected_evaluations = st.multiselect(
-                "Assign to evaluations",
-                evaluation_labels,
-                default=evaluation_selected_labels,
-            )
-            selected_note_type = (
-                note_row["note_type"].strip().lower()
-                if note_row["note_type"]
-                else "todo"
-            )
-            note_type_index = 0 if selected_note_type != "decision" else 1
-            note_type = st.selectbox(
-                "Type",
-                note_type_options,
-                index=note_type_index,
-            )
+            left_col, right_col = st.columns(2, gap="large")
+            with left_col:
+                meeting_date = st.text_input(
+                    "Meeting date (optional)",
+                    value=note_row["meeting_date"] or "",
+                )
+                topic = st.text_input(
+                    "Topic (optional)",
+                    value=note_row["topic"] or "",
+                )
+                selected_backlogs = st.multiselect(
+                    "Assign to backlogs",
+                    backlog_labels,
+                    default=backlog_selected_labels,
+                )
+                selected_dependencies = st.multiselect(
+                    "Assign to dependencies",
+                    dependency_labels,
+                    default=dependency_selected_labels,
+                )
+            with right_col:
+                meeting_label = st.selectbox(
+                    "Meeting (optional)",
+                    [""] + meeting_labels,
+                    index=([""] + meeting_labels).index(meeting_selected_label)
+                    if meeting_selected_label in meeting_labels
+                    else 0,
+                )
+                selected_note_type = (
+                    note_row["note_type"].strip().lower()
+                    if note_row["note_type"]
+                    else "todo"
+                )
+                note_type_index = 0 if selected_note_type != "decision" else 1
+                note_type = st.selectbox(
+                    "Type",
+                    note_type_options,
+                    index=note_type_index,
+                )
+                selected_themes = st.multiselect(
+                    "Assign to themes",
+                    theme_labels,
+                    default=theme_selected_labels,
+                )
+                selected_evaluations = st.multiselect(
+                    "Assign to evaluations",
+                    evaluation_labels,
+                    default=evaluation_selected_labels,
+                )
             note = st.text_area(
                 "Note (bullet)",
                 value=note_row["note"] or "",
@@ -2218,13 +2467,15 @@ if tab_choice == "Meeting Notes":
                         evaluation_choices[label] for label in selected_evaluations
                     ]
                     with get_conn() as conn:
+                        meeting_id = meeting_choices.get(meeting_label)
                         conn.execute(
                             """
                             UPDATE meeting_note
-                            SET meeting_date = ?, topic = ?, note_type = ?, note = ?
+                            SET meeting_id = ?, meeting_date = ?, topic = ?, note_type = ?, note = ?
                             WHERE id = ?
                             """,
                             (
+                                meeting_id,
                                 meeting_date.strip() or None,
                                 topic.strip() or None,
                                 note_type.lower(),
@@ -2273,6 +2524,11 @@ if tab_choice == "Meeting Notes":
             value=default_meeting_date,
             key="meeting_note_date",
         )
+        meeting_label = st.selectbox(
+            "Meeting (optional)",
+            [""] + meeting_labels,
+            key="meeting_note_meeting",
+        )
         topic = st.text_input(
             "Topic (optional)",
             key="meeting_note_topic",
@@ -2283,8 +2539,10 @@ if tab_choice == "Meeting Notes":
                 st.error("Note is required.")
             else:
                 with get_conn() as conn:
+                    meeting_id = meeting_choices.get(meeting_label)
                     note_id = insert_meeting_note(
                         conn,
+                        meeting_id,
                         meeting_date.strip() or None,
                         topic.strip() or None,
                         "todo",
@@ -2323,6 +2581,52 @@ if tab_choice == "Meeting Notes":
                 st.caption(f"Selected: {len(selected_ids)} items")
         else:
             st.caption("Selected: none")
+
+        if len(selected_ids) > 1:
+            with st.form("bulk_assign_meeting_notes_form"):
+                st.caption("Bulk assign (replaces existing assignments).")
+                bulk_backlogs = st.multiselect(
+                    "Assign to backlogs",
+                    backlog_labels,
+                    key="bulk_meeting_note_backlogs",
+                )
+                bulk_dependencies = st.multiselect(
+                    "Assign to dependencies",
+                    dependency_labels,
+                    key="bulk_meeting_note_dependencies",
+                )
+                bulk_themes = st.multiselect(
+                    "Assign to themes",
+                    theme_labels,
+                    key="bulk_meeting_note_themes",
+                )
+                bulk_evaluations = st.multiselect(
+                    "Assign to evaluations",
+                    evaluation_labels,
+                    key="bulk_meeting_note_evaluations",
+                )
+                bulk_submit = st.form_submit_button("Apply assignments")
+                if bulk_submit:
+                    backlog_ids = [backlog_choices[label] for label in bulk_backlogs]
+                    dependency_ids = [
+                        dependency_choices[label] for label in bulk_dependencies
+                    ]
+                    theme_ids = [theme_choices[label] for label in bulk_themes]
+                    evaluation_ids = [
+                        evaluation_choices[label] for label in bulk_evaluations
+                    ]
+                    with get_conn() as conn:
+                        for note_id in selected_ids:
+                            upsert_meeting_note_backlogs(conn, note_id, backlog_ids)
+                            upsert_meeting_note_dependencies(
+                                conn, note_id, dependency_ids
+                            )
+                            upsert_meeting_note_themes(conn, note_id, theme_ids)
+                            upsert_meeting_note_evaluations(
+                                conn, note_id, evaluation_ids
+                            )
+                    st.success("Assignments updated.")
+                    st.rerun()
 
         action_cols = st.columns(2, gap="small")
         with action_cols[0]:
