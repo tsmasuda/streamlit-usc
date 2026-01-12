@@ -286,6 +286,27 @@ def init_db():
 
         sub_backlog_info = conn.execute("PRAGMA table_info(sub_backlog)").fetchall()
         sub_backlog_columns = [row["name"] for row in sub_backlog_info]
+        backlog_id_info = next(
+            (row for row in sub_backlog_info if row["name"] == "backlog_id"),
+            None,
+        )
+        if backlog_id_info and backlog_id_info["notnull"]:
+            conn.executescript(
+                """
+                CREATE TABLE sub_backlog_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    backlog_id INTEGER,
+                    title TEXT NOT NULL,
+                    note TEXT
+                );
+                INSERT INTO sub_backlog_new (id, backlog_id, title, note)
+                SELECT id, backlog_id, COALESCE(title, ''), note FROM sub_backlog;
+                DROP TABLE sub_backlog;
+                ALTER TABLE sub_backlog_new RENAME TO sub_backlog;
+                """
+            )
+            sub_backlog_info = conn.execute("PRAGMA table_info(sub_backlog)").fetchall()
+            sub_backlog_columns = [row["name"] for row in sub_backlog_info]
         if "backlog_id" not in sub_backlog_columns:
             conn.execute("ALTER TABLE sub_backlog ADD COLUMN backlog_id INTEGER")
         if "title" not in sub_backlog_columns:
@@ -2076,6 +2097,24 @@ if tab_choice == "Backlog":
                     for backlog_id in selected_ids:
                         upsert_backlog_dependencies(conn, backlog_id, dependency_ids)
                 st.success("Dependencies updated.")
+                st.rerun()
+
+        with st.form("bulk_assign_backlog_sub_backlogs_form"):
+            st.caption("Bulk assign sub-backlogs (replaces existing assignments).")
+            bulk_sub_backlogs = st.multiselect(
+                "Assign sub-backlogs",
+                existing_sub_backlog_labels,
+                key="bulk_backlog_sub_backlogs",
+            )
+            bulk_sub_submit = st.form_submit_button("Apply sub-backlogs")
+            if bulk_sub_submit:
+                sub_backlog_ids = [
+                    sub_backlog_choices[label] for label in bulk_sub_backlogs
+                ]
+                with get_conn() as conn:
+                    for backlog_id in selected_ids:
+                        upsert_backlog_sub_backlogs(conn, backlog_id, sub_backlog_ids)
+                st.success("Sub-backlogs updated.")
                 st.rerun()
 
         with st.form("bulk_assign_backlog_evaluation_form"):
