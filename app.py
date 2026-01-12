@@ -659,8 +659,8 @@ def fetch_backlog_dependency_rows():
                 d.sub_task AS dependency_sub_task,
                 d.team AS dependency_team
             FROM backlog b
-            INNER JOIN backlog_dependency bd ON b.id = bd.backlog_id
-            INNER JOIN dependency d ON d.id = bd.dependency_id
+            LEFT JOIN backlog_dependency bd ON b.id = bd.backlog_id
+            LEFT JOIN dependency d ON d.id = bd.dependency_id
             ORDER BY b.id, d.id
             """
         ).fetchall()
@@ -683,8 +683,8 @@ def fetch_backlog_sub_backlog_rows():
                 sb.title AS sub_backlog_title,
                 sb.note AS sub_backlog_note
             FROM backlog b
-            INNER JOIN sub_backlog_backlog sbb ON b.id = sbb.backlog_id
-            INNER JOIN sub_backlog sb ON sb.id = sbb.sub_backlog_id
+            LEFT JOIN sub_backlog_backlog sbb ON b.id = sbb.backlog_id
+            LEFT JOIN sub_backlog sb ON sb.id = sbb.sub_backlog_id
             ORDER BY b.id, sb.id
             """
         ).fetchall()
