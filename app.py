@@ -700,6 +700,36 @@ def fetch_backlog_sub_backlog_rows():
     return rows
 
 
+def fetch_backlog_sub_backlog_dependency_rows():
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                b.id AS backlog_id,
+                b.task AS backlog_task,
+                b.task_details AS backlog_task_details,
+                b.theme AS backlog_theme,
+                b.evaluation AS backlog_evaluation,
+                b.team AS backlog_team,
+                b.sprint AS backlog_sprint,
+                sb.id AS sub_backlog_id,
+                sb.title AS sub_backlog_title,
+                sb.note AS sub_backlog_note,
+                d.id AS dependency_id,
+                d.task AS dependency_task,
+                d.sub_task AS dependency_sub_task,
+                d.team AS dependency_team
+            FROM backlog b
+            LEFT JOIN sub_backlog_backlog sbb ON b.id = sbb.backlog_id
+            LEFT JOIN sub_backlog sb ON sb.id = sbb.sub_backlog_id
+            LEFT JOIN backlog_dependency bd ON b.id = bd.backlog_id
+            LEFT JOIN dependency d ON d.id = bd.dependency_id
+            ORDER BY b.id, sb.id, d.id
+            """
+        ).fetchall()
+    return rows
+
+
 def fetch_backlogs_for_sub_backlog(sub_backlog_id):
     with get_conn() as conn:
         rows = conn.execute(
@@ -1047,6 +1077,7 @@ tab_choice = st.radio(
         "Sprint x Team",
         "Backlog x Dependencies",
         "Backlog x Sub-backlogs",
+        "Backlog x Sub-backlogs x Dependencies",
     ],
     horizontal=True,
     key="active_tab",
@@ -2565,6 +2596,15 @@ if tab_choice == "Backlog x Sub-backlogs":
         st.dataframe(join_df, width="stretch")
     else:
         st.info("No backlog/sub-backlog links yet.")
+
+if tab_choice == "Backlog x Sub-backlogs x Dependencies":
+    st.subheader("Backlog x Sub-backlogs x Dependencies")
+    join_rows = fetch_backlog_sub_backlog_dependency_rows()
+    if join_rows:
+        join_df = pd.DataFrame([dict(row) for row in join_rows])
+        st.dataframe(join_df, width="stretch")
+    else:
+        st.info("No backlog/sub-backlog/dependency links yet.")
 
 if tab_choice == "Sub-backlogs":
     backlog_rows = fetch_backlogs()
