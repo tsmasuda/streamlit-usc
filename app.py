@@ -12,6 +12,15 @@ DB_PATH = "backlog.db"
 BACKLOG_TEAMS = ["Team 1", "Team 2"]
 DEPENDENCY_TEAMS = ["PC", "BC", "CC", "Integration", "Auth", "Digital"]
 SPRINTS = [f"Sprint {i}" for i in range(1, 12)]
+PLACEHOLDER_OPTION = "Choose options"
+
+
+def with_placeholder(options):
+    return [PLACEHOLDER_OPTION] + list(options)
+
+
+def normalize_choice(value):
+    return None if value == PLACEHOLDER_OPTION else value
 
 
 def get_conn():
@@ -691,6 +700,30 @@ def fetch_backlog_sub_backlog_rows():
     return rows
 
 
+def fetch_backlogs_for_sub_backlog(sub_backlog_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                b.id,
+                b.task,
+                b.task_details,
+                b.lob,
+                b.theme,
+                b.evaluation,
+                b.estimation,
+                b.team,
+                b.sprint
+            FROM backlog b
+            INNER JOIN sub_backlog_backlog sbb ON b.id = sbb.backlog_id
+            WHERE sbb.sub_backlog_id = ?
+            ORDER BY b.id
+            """,
+            (sub_backlog_id,),
+        ).fetchall()
+    return rows
+
+
 def fetch_sub_backlog_ids_for_backlog(backlog_id):
     with get_conn() as conn:
         rows = conn.execute(
@@ -1067,11 +1100,11 @@ if tab_choice == "Backlog":
                     st.image(pasted_image, caption="Pasted image")
             with middle_col:
                 task = st.text_input("Task")
-                theme_options = [""] + themes
+                theme_options = with_placeholder(themes)
                 theme_choice = st.selectbox("Theme", theme_options, index=0)
                 lob = st.text_input("LOB (optional)")
-                team = st.selectbox("Team", [""] + BACKLOG_TEAMS, index=0)
-                evaluation_options = [""] + evaluations
+                team = st.selectbox("Team", with_placeholder(BACKLOG_TEAMS), index=0)
+                evaluation_options = with_placeholder(evaluations)
                 evaluation_choice = st.selectbox(
                     "Evaluation",
                     evaluation_options,
@@ -1088,17 +1121,19 @@ if tab_choice == "Backlog":
                     value=0,
                     key="add_estimation_right",
                 )
-                sprint = st.selectbox("Sprint", [""] + SPRINTS, index=0)
+                sprint = st.selectbox("Sprint", with_placeholder(SPRINTS), index=0)
             selected_dependency_labels = st.multiselect(
                 "Existing dependencies",
                 options=existing_dependency_labels,
                 default=[],
+                placeholder=PLACEHOLDER_OPTION,
                 key="add_existing_deps",
             )
             selected_sub_backlog_labels = st.multiselect(
                 "Assign existing sub-backlogs",
                 options=existing_sub_backlog_labels,
                 default=[],
+                placeholder=PLACEHOLDER_OPTION,
                 key="add_existing_sub_backlogs",
             )
 
@@ -1109,7 +1144,7 @@ if tab_choice == "Backlog":
                 with team_col:
                     dep_team = st.selectbox(
                         f"Dependency team {i + 1}",
-                        [""] + DEPENDENCY_TEAMS,
+                        with_placeholder(DEPENDENCY_TEAMS),
                         key=f"add_dep_team_{i}",
                     )
                 with task_col:
@@ -1151,18 +1186,18 @@ if tab_choice == "Backlog":
                     invalid_dep_team = [
                         dep_task
                         for dep_task, _, dep_team in new_dependencies
-                        if dep_task.strip() and dep_team == ""
+                        if dep_task.strip() and dep_team == PLACEHOLDER_OPTION
                     ]
                     if invalid_dep_team:
                         st.error("Dependency team is required for new dependencies.")
                         return
-                    theme = new_theme.strip() or theme_choice
-                    if theme == "":
+                    theme = new_theme.strip() or normalize_choice(theme_choice)
+                    if not theme:
                         st.error("Backlog theme is required.")
                         return
-                    evaluation_value = evaluation_choice or None
-                    team_value = team or None
-                    sprint_value = sprint or None
+                    evaluation_value = normalize_choice(evaluation_choice)
+                    team_value = normalize_choice(team)
+                    sprint_value = normalize_choice(sprint)
                     image_bytes = pasted_image
                     estimation_value = int(estimation_input_right)
                     task_details_value = task_details.strip() or None
@@ -1264,8 +1299,8 @@ if tab_choice == "Backlog":
                 remove_image = st.checkbox("Remove image", key="remove_backlog_image")
             with middle_col:
                 edit_task = st.text_input("Task", value=backlog_row["task"])
-                theme_options = [""] + themes
-                theme_value = backlog_row["theme"] or ""
+                theme_options = with_placeholder(themes)
+                theme_value = backlog_row["theme"] or PLACEHOLDER_OPTION
                 if theme_value and theme_value not in theme_options:
                     theme_options.append(theme_value)
                 default_theme = (
@@ -1281,15 +1316,15 @@ if tab_choice == "Backlog":
                     "LOB (optional)",
                     value=backlog_row["lob"] or "",
                 )
-                team_options = [""] + BACKLOG_TEAMS
-                team_value = backlog_row["team"] or ""
+                team_options = with_placeholder(BACKLOG_TEAMS)
+                team_value = backlog_row["team"] or PLACEHOLDER_OPTION
                 edit_team = st.selectbox(
                     "Team",
                     team_options,
                     index=team_options.index(team_value) if team_value in team_options else 0,
                 )
-                evaluation_options = [""] + evaluations
-                evaluation_value = backlog_row["evaluation"] or ""
+                evaluation_options = with_placeholder(evaluations)
+                evaluation_value = backlog_row["evaluation"] or PLACEHOLDER_OPTION
                 if evaluation_value and evaluation_value not in evaluation_options:
                     evaluation_options.append(evaluation_value)
                 default_evaluation = (
@@ -1319,8 +1354,8 @@ if tab_choice == "Backlog":
                     value=estimation_default,
                     key="edit_estimation_value",
                 )
-                sprint_options = [""] + SPRINTS
-                sprint_value = backlog_row["sprint"] or ""
+                sprint_options = with_placeholder(SPRINTS)
+                sprint_value = backlog_row["sprint"] or PLACEHOLDER_OPTION
                 edit_sprint = st.selectbox(
                     "Sprint",
                     sprint_options,
@@ -1335,6 +1370,7 @@ if tab_choice == "Backlog":
                 "Existing dependencies",
                 options=existing_dependency_labels,
                 default=default_dependency_labels,
+                placeholder=PLACEHOLDER_OPTION,
                 key="edit_existing_deps",
             )
             linked_sub_backlog_ids = fetch_sub_backlog_ids_for_backlog(backlog_row["id"])
@@ -1347,6 +1383,7 @@ if tab_choice == "Backlog":
                 "Assign existing sub-backlogs",
                 options=existing_sub_backlog_labels,
                 default=default_sub_backlog_labels,
+                placeholder=PLACEHOLDER_OPTION,
                 key="edit_existing_sub_backlogs",
             )
 
@@ -1357,7 +1394,7 @@ if tab_choice == "Backlog":
                 with team_col:
                     dep_team = st.selectbox(
                         f"Dependency team {i + 1}",
-                        [""] + DEPENDENCY_TEAMS,
+                        with_placeholder(DEPENDENCY_TEAMS),
                         key=f"edit_dep_team_{i}",
                     )
                 with task_col:
@@ -1417,18 +1454,18 @@ if tab_choice == "Backlog":
                     invalid_dep_team = [
                         dep_task
                         for dep_task, _, dep_team in edit_new_dependencies
-                        if dep_task.strip() and dep_team == ""
+                        if dep_task.strip() and dep_team == PLACEHOLDER_OPTION
                     ]
                     if invalid_dep_team:
                         st.error("Dependency team is required for new dependencies.")
                         return
-                    edit_theme = edit_new_theme.strip() or edit_theme_choice
-                    if edit_theme == "":
+                    edit_theme = edit_new_theme.strip() or normalize_choice(edit_theme_choice)
+                    if not edit_theme:
                         st.error("Theme is required.")
                         return
-                    edit_evaluation_value = edit_evaluation_choice or None
-                    edit_team_value = edit_team or None
-                    edit_sprint_value = edit_sprint or None
+                    edit_evaluation_value = normalize_choice(edit_evaluation_choice)
+                    edit_team_value = normalize_choice(edit_team)
+                    edit_sprint_value = normalize_choice(edit_sprint)
                     if remove_image:
                         image_bytes = None
                     elif pasted_replace_image:
@@ -1534,13 +1571,20 @@ if tab_choice == "Backlog":
         st.write("Merging these items:")
         st.write(selected_labels)
 
-        primary_options = [row["id"] for row in selected_rows]
+        primary_options = with_placeholder([row["id"] for row in selected_rows])
         primary_id = st.selectbox(
             "Merge into",
             options=primary_options,
-            format_func=lambda item_id: backlog_label(backlog_lookup[item_id]),
+            format_func=lambda item_id: (
+                PLACEHOLDER_OPTION
+                if item_id == PLACEHOLDER_OPTION
+                else backlog_label(backlog_lookup[item_id])
+            ),
             key="merge_primary_id",
         )
+        if primary_id == PLACEHOLDER_OPTION:
+            st.info("Choose a primary backlog to continue.")
+            return
         primary_row = backlog_lookup[primary_id]
 
         theme_values = {row["theme"] for row in selected_rows if row["theme"]}
@@ -1572,8 +1616,8 @@ if tab_choice == "Backlog":
                     value=primary_row["task"],
                     key=f"merge_task_{primary_id}",
                 )
-                theme_options = [""] + themes
-                theme_value = primary_row["theme"] or ""
+                theme_options = with_placeholder(themes)
+                theme_value = primary_row["theme"] or PLACEHOLDER_OPTION
                 if theme_value and theme_value not in theme_options:
                     theme_options.append(theme_value)
                 merge_theme_choice = st.selectbox(
@@ -1587,16 +1631,16 @@ if tab_choice == "Backlog":
                     value=primary_row["lob"] or "",
                     key=f"merge_lob_{primary_id}",
                 )
-                team_options = [""] + BACKLOG_TEAMS
-                team_value = primary_row["team"] or ""
+                team_options = with_placeholder(BACKLOG_TEAMS)
+                team_value = primary_row["team"] or PLACEHOLDER_OPTION
                 merge_team = st.selectbox(
                     "Team",
                     team_options,
                     index=team_options.index(team_value) if team_value in team_options else 0,
                     key=f"merge_team_{primary_id}",
                 )
-                evaluation_options = [""] + evaluations
-                evaluation_value = primary_row["evaluation"] or ""
+                evaluation_options = with_placeholder(evaluations)
+                evaluation_value = primary_row["evaluation"] or PLACEHOLDER_OPTION
                 if evaluation_value and evaluation_value not in evaluation_options:
                     evaluation_options.append(evaluation_value)
                 merge_evaluation_choice = st.selectbox(
@@ -1626,8 +1670,8 @@ if tab_choice == "Backlog":
                     value=estimation_sum,
                     key=f"merge_estimation_{primary_id}",
                 )
-                sprint_options = [""] + SPRINTS
-                sprint_value = primary_row["sprint"] or ""
+                sprint_options = with_placeholder(SPRINTS)
+                sprint_value = primary_row["sprint"] or PLACEHOLDER_OPTION
                 merge_sprint = st.selectbox(
                     "Sprint",
                     sprint_options,
@@ -1639,6 +1683,7 @@ if tab_choice == "Backlog":
                     "Existing dependencies",
                     options=existing_dependency_labels,
                     default=default_dep_labels,
+                    placeholder=PLACEHOLDER_OPTION,
                     key=f"merge_existing_deps_{primary_id}",
                 )
 
@@ -1647,14 +1692,14 @@ if tab_choice == "Backlog":
                 if not merge_task.strip():
                     st.error("Backlog task is required.")
                     return
-                merge_theme = merge_new_theme.strip() or merge_theme_choice
-                if merge_theme == "":
+                merge_theme = merge_new_theme.strip() or normalize_choice(merge_theme_choice)
+                if not merge_theme:
                     st.error("Theme is required.")
                     return
 
-                merge_evaluation_value = merge_evaluation_choice or None
-                merge_team_value = merge_team or None
-                merge_sprint_value = merge_sprint or None
+                merge_evaluation_value = normalize_choice(merge_evaluation_choice)
+                merge_team_value = normalize_choice(merge_team)
+                merge_sprint_value = normalize_choice(merge_sprint)
                 merge_task_details_value = merge_task_details.strip() or None
                 merge_lob_value = merge_lob.strip() or None
                 merge_estimation_value = int(merge_estimation)
@@ -1832,7 +1877,7 @@ if tab_choice == "Backlog":
                 st.error(f"Failed to read CSV: {exc}")
             else:
                 st.dataframe(backlog_csv.head(), width="stretch")
-                columns = [""] + list(backlog_csv.columns)
+                columns = with_placeholder(backlog_csv.columns)
                 map_task = st.selectbox(
                     "Map: task (required)",
                     columns,
@@ -1875,9 +1920,9 @@ if tab_choice == "Backlog":
                 )
                 if st.button("Import backlog", key="import_backlog_btn"):
                     missing = []
-                    if map_task == "":
+                    if map_task == PLACEHOLDER_OPTION:
                         missing.append("task")
-                    if map_theme == "":
+                    if map_theme == PLACEHOLDER_OPTION:
                         missing.append("theme")
                     if missing:
                         st.error(f"Required mappings missing: {', '.join(missing)}")
@@ -1891,7 +1936,7 @@ if tab_choice == "Backlog":
                         }
 
                         def get_cell(row, column):
-                            if not column:
+                            if not column or column == PLACEHOLDER_OPTION:
                                 return None
                             value = row[column]
                             if pd.isna(value):
@@ -1917,7 +1962,11 @@ if tab_choice == "Backlog":
                                 team_value = get_cell(row, map_team)
                                 sprint_value = get_cell(row, map_sprint)
                                 estimation_value = None
-                                estimation_cell = row[map_estimation] if map_estimation else None
+                                estimation_cell = (
+                                    row[map_estimation]
+                                    if map_estimation != PLACEHOLDER_OPTION
+                                    else None
+                                )
                                 estimation_value, err = parse_estimation(estimation_cell)
                                 if err:
                                     skipped += 1
@@ -1969,7 +2018,7 @@ if tab_choice == "Backlog":
     with backlog_filter_row1[3]:
         backlog_theme_filter = st.selectbox(
             "Theme (filter)",
-            [""] + themes,
+            with_placeholder(themes),
             index=0,
             key="backlog_theme_filter",
         )
@@ -1977,21 +2026,21 @@ if tab_choice == "Backlog":
     with backlog_filter_row2[0]:
         backlog_team_filter = st.selectbox(
             "Team (filter)",
-            [""] + BACKLOG_TEAMS,
+            with_placeholder(BACKLOG_TEAMS),
             index=0,
             key="backlog_team_filter",
         )
     with backlog_filter_row2[1]:
         backlog_sprint_filter = st.selectbox(
             "Sprint (filter)",
-            [""] + SPRINTS,
+            with_placeholder(SPRINTS),
             index=0,
             key="backlog_sprint_filter",
         )
     with backlog_filter_row2[2]:
         backlog_evaluation_filter = st.selectbox(
             "Evaluation (filter)",
-            [""] + evaluations,
+            with_placeholder(evaluations),
             index=0,
             key="backlog_evaluation_filter",
         )
@@ -2025,19 +2074,19 @@ if tab_choice == "Backlog":
                 .fillna("")
                 .str.contains(query, case=False, na=False)
             ]
-        if backlog_team_filter:
+        if backlog_team_filter != PLACEHOLDER_OPTION:
             filtered_backlog_df = filtered_backlog_df[
                 filtered_backlog_df["team"] == backlog_team_filter
             ]
-        if backlog_sprint_filter:
+        if backlog_sprint_filter != PLACEHOLDER_OPTION:
             filtered_backlog_df = filtered_backlog_df[
                 filtered_backlog_df["sprint"] == backlog_sprint_filter
             ]
-        if backlog_theme_filter:
+        if backlog_theme_filter != PLACEHOLDER_OPTION:
             filtered_backlog_df = filtered_backlog_df[
                 filtered_backlog_df["theme"] == backlog_theme_filter
             ]
-        if backlog_evaluation_filter:
+        if backlog_evaluation_filter != PLACEHOLDER_OPTION:
             filtered_backlog_df = filtered_backlog_df[
                 filtered_backlog_df["evaluation"] == backlog_evaluation_filter
             ]
@@ -2087,6 +2136,7 @@ if tab_choice == "Backlog":
                 "Assign dependencies",
                 existing_dependency_labels,
                 key="bulk_backlog_dependencies",
+                placeholder=PLACEHOLDER_OPTION,
             )
             bulk_submit = st.form_submit_button("Apply dependencies")
             if bulk_submit:
@@ -2105,6 +2155,7 @@ if tab_choice == "Backlog":
                 "Assign sub-backlogs",
                 existing_sub_backlog_labels,
                 key="bulk_backlog_sub_backlogs",
+                placeholder=PLACEHOLDER_OPTION,
             )
             bulk_sub_submit = st.form_submit_button("Apply sub-backlogs")
             if bulk_sub_submit:
@@ -2121,12 +2172,12 @@ if tab_choice == "Backlog":
             st.caption("Bulk assign evaluation (sets the same value for all selected backlogs).")
             bulk_evaluation = st.selectbox(
                 "Assign evaluation",
-                [""] + evaluations,
+                with_placeholder(evaluations),
                 key="bulk_backlog_evaluation",
             )
             eval_submit = st.form_submit_button("Apply evaluation")
             if eval_submit:
-                evaluation_value = bulk_evaluation or None
+                evaluation_value = normalize_choice(bulk_evaluation)
                 with get_conn() as conn:
                     placeholders = ",".join(["?"] * len(selected_ids))
                     conn.execute(
@@ -2177,7 +2228,11 @@ if tab_choice == "Dependencies":
         with st.form("add_dependency_form"):
             team_col, task_col, sub_task_col = st.columns(3, gap="large")
             with team_col:
-                dep_team = st.selectbox("Team", [""] + DEPENDENCY_TEAMS, index=0)
+                dep_team = st.selectbox(
+                    "Team",
+                    with_placeholder(DEPENDENCY_TEAMS),
+                    index=0,
+                )
             with task_col:
                 dep_task = st.text_input("Task")
             with sub_task_col:
@@ -2189,7 +2244,7 @@ if tab_choice == "Dependencies":
             if dep_submitted:
                 if not dep_task.strip():
                     st.error("Dependency task is required.")
-                elif dep_team == "":
+                elif dep_team == PLACEHOLDER_OPTION:
                     st.error("Dependency team is required.")
                 else:
                     with get_conn() as conn:
@@ -2208,10 +2263,13 @@ if tab_choice == "Dependencies":
         with st.form("edit_dependency_form"):
             team_col, task_col, sub_task_col = st.columns(3, gap="large")
             with team_col:
+                dep_team_options = with_placeholder(DEPENDENCY_TEAMS)
                 edit_dep_team = st.selectbox(
                     "Team",
-                    DEPENDENCY_TEAMS,
-                    index=DEPENDENCY_TEAMS.index(dep_row["team"]),
+                    dep_team_options,
+                    index=dep_team_options.index(dep_row["team"])
+                    if dep_row["team"] in dep_team_options
+                    else 0,
                 )
             with task_col:
                 edit_dep_task = st.text_input("Task", value=dep_row["task"])
@@ -2227,6 +2285,8 @@ if tab_choice == "Dependencies":
             if dep_updated:
                 if not edit_dep_task.strip():
                     st.error("Dependency task is required.")
+                elif edit_dep_team == PLACEHOLDER_OPTION:
+                    st.error("Dependency team is required.")
                 else:
                     with get_conn() as conn:
                         conn.execute(
@@ -2296,7 +2356,7 @@ if tab_choice == "Dependencies":
                 st.error(f"Failed to read CSV: {exc}")
             else:
                 st.dataframe(dep_csv.head(), width="stretch")
-                columns = [""] + list(dep_csv.columns)
+                columns = with_placeholder(dep_csv.columns)
                 map_task = st.selectbox(
                     "Map: task (required)",
                     columns,
@@ -2314,9 +2374,9 @@ if tab_choice == "Dependencies":
                 )
                 if st.button("Import dependency", key="import_dependency_btn"):
                     missing = []
-                    if map_task == "":
+                    if map_task == PLACEHOLDER_OPTION:
                         missing.append("task")
-                    if map_team == "":
+                    if map_team == PLACEHOLDER_OPTION:
                         missing.append("team")
                     if missing:
                         st.error(f"Required mappings missing: {', '.join(missing)}")
@@ -2326,7 +2386,7 @@ if tab_choice == "Dependencies":
                         skip_reasons = {"missing_task": 0, "missing_team": 0}
 
                         def get_cell(row, column):
-                            if not column:
+                            if not column or column == PLACEHOLDER_OPTION:
                                 return None
                             value = row[column]
                             if pd.isna(value):
@@ -2378,7 +2438,7 @@ if tab_choice == "Dependencies":
     with dependency_filter_cols[2]:
         dependency_team_filter = st.selectbox(
             "Team (filter)",
-            [""] + DEPENDENCY_TEAMS,
+            with_placeholder(DEPENDENCY_TEAMS),
             index=0,
             key="dependency_team_filter",
         )
@@ -2405,7 +2465,7 @@ if tab_choice == "Dependencies":
                 .fillna("")
                 .str.contains(query, case=False, na=False)
             ]
-        if dependency_team_filter:
+        if dependency_team_filter != PLACEHOLDER_OPTION:
             filtered_dependency_df = filtered_dependency_df[
                 filtered_dependency_df["team"] == dependency_team_filter
             ]
@@ -2459,6 +2519,7 @@ if tab_choice == "Dependencies":
                 "Assign backlogs",
                 backlog_labels,
                 key="bulk_dependency_backlogs",
+                placeholder=PLACEHOLDER_OPTION,
             )
             bulk_submit = st.form_submit_button("Apply backlogs")
             if bulk_submit:
@@ -2516,6 +2577,8 @@ if tab_choice == "Sub-backlogs":
         with st.form("add_sub_backlog_form"):
             title = st.text_input("Title")
             note = st.text_area("Note (optional)", height=120)
+            st.caption("Associated backlogs")
+            st.info("No associated backlogs yet.")
             render_meeting_notes_table([])
             submitted = st.form_submit_button("Add sub-backlog")
             if submitted:
@@ -2540,6 +2603,13 @@ if tab_choice == "Sub-backlogs":
                 value=sub_backlog_row["note"] or "",
                 height=120,
             )
+            st.caption("Associated backlogs")
+            associated_rows = fetch_backlogs_for_sub_backlog(sub_backlog_row["id"])
+            if associated_rows:
+                associated_df = pd.DataFrame([dict(row) for row in associated_rows])
+                st.dataframe(associated_df, width="stretch")
+            else:
+                st.info("No associated backlogs.")
             render_meeting_notes_table(
                 fetch_meeting_notes_for_sub_backlog(sub_backlog_row["id"])
             )
@@ -3072,7 +3142,7 @@ if tab_choice == "Meeting Notes":
                     for label, item_id in meeting_choices.items()
                     if item_id == note_row["meeting_id"]
                 ),
-                "",
+                PLACEHOLDER_OPTION,
             )
             left_col, right_col = st.columns(2, gap="large")
             with left_col:
@@ -3088,40 +3158,52 @@ if tab_choice == "Meeting Notes":
                     "Assign to backlogs",
                     backlog_labels,
                     default=backlog_selected_labels,
+                    placeholder=PLACEHOLDER_OPTION,
                 )
                 selected_dependencies = st.multiselect(
                     "Assign to dependencies",
                     dependency_labels,
                     default=dependency_selected_labels,
+                    placeholder=PLACEHOLDER_OPTION,
                 )
             with right_col:
                 meeting_label = st.selectbox(
                     "Meeting (optional)",
-                    [""] + meeting_labels,
-                    index=([""] + meeting_labels).index(meeting_selected_label)
-                    if meeting_selected_label in meeting_labels
-                    else 0,
+                    with_placeholder(meeting_labels),
+                    index=(
+                        with_placeholder(meeting_labels).index(meeting_selected_label)
+                        if meeting_selected_label in meeting_labels
+                        else 0
+                    ),
                 )
                 selected_note_type = (
                     note_row["note_type"].strip().lower()
                     if note_row["note_type"]
                     else "todo"
                 )
-                note_type_index = 0 if selected_note_type != "decision" else 1
+                note_type_value = "Decision" if selected_note_type == "decision" else "Todo"
+                note_type_options_with_placeholder = with_placeholder(note_type_options)
+                note_type_index = (
+                    note_type_options_with_placeholder.index(note_type_value)
+                    if note_type_value in note_type_options_with_placeholder
+                    else 0
+                )
                 note_type = st.selectbox(
                     "Type",
-                    note_type_options,
+                    note_type_options_with_placeholder,
                     index=note_type_index,
                 )
                 selected_themes = st.multiselect(
                     "Assign to themes",
                     theme_labels,
                     default=theme_selected_labels,
+                    placeholder=PLACEHOLDER_OPTION,
                 )
                 selected_evaluations = st.multiselect(
                     "Assign to evaluations",
                     evaluation_labels,
                     default=evaluation_selected_labels,
+                    placeholder=PLACEHOLDER_OPTION,
                 )
             note = st.text_area(
                 "Note (bullet)",
@@ -3143,6 +3225,9 @@ if tab_choice == "Meeting Notes":
                     ]
                     with get_conn() as conn:
                         meeting_id = meeting_choices.get(meeting_label)
+                        if note_type == PLACEHOLDER_OPTION:
+                            st.error("Note type is required.")
+                            return
                         conn.execute(
                             """
                             UPDATE meeting_note
@@ -3204,7 +3289,7 @@ if tab_choice == "Meeting Notes":
         with meeting_col:
             meeting_label = st.selectbox(
                 "Meeting (optional)",
-                [""] + meeting_labels,
+                with_placeholder(meeting_labels),
                 key="meeting_note_meeting",
             )
         with topic_col:
@@ -3270,22 +3355,26 @@ if tab_choice == "Meeting Notes":
                         "Assign to backlogs",
                         backlog_labels,
                         key="bulk_meeting_note_backlogs",
+                        placeholder=PLACEHOLDER_OPTION,
                     )
                     bulk_dependencies = st.multiselect(
                         "Assign to dependencies",
                         dependency_labels,
                         key="bulk_meeting_note_dependencies",
+                        placeholder=PLACEHOLDER_OPTION,
                     )
                 with right_col:
                     bulk_themes = st.multiselect(
                         "Assign to themes",
                         theme_labels,
                         key="bulk_meeting_note_themes",
+                        placeholder=PLACEHOLDER_OPTION,
                     )
                     bulk_evaluations = st.multiselect(
                         "Assign to evaluations",
                         evaluation_labels,
                         key="bulk_meeting_note_evaluations",
+                        placeholder=PLACEHOLDER_OPTION,
                     )
                 bulk_submit = st.form_submit_button("Apply assignments")
                 if bulk_submit:
