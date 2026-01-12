@@ -1,6 +1,7 @@
 import base64
 import numbers
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import streamlit as st
@@ -62,6 +63,46 @@ def init_db():
                 PRIMARY KEY (backlog_id, dependency_id),
                 FOREIGN KEY (backlog_id) REFERENCES backlog(id) ON DELETE CASCADE,
                 FOREIGN KEY (dependency_id) REFERENCES dependency(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS meeting_note (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                meeting_date TEXT,
+                topic TEXT,
+                note_type TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS meeting_note_backlog (
+                meeting_note_id INTEGER NOT NULL,
+                backlog_id INTEGER NOT NULL,
+                PRIMARY KEY (meeting_note_id, backlog_id),
+                FOREIGN KEY (meeting_note_id) REFERENCES meeting_note(id) ON DELETE CASCADE,
+                FOREIGN KEY (backlog_id) REFERENCES backlog(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS meeting_note_dependency (
+                meeting_note_id INTEGER NOT NULL,
+                dependency_id INTEGER NOT NULL,
+                PRIMARY KEY (meeting_note_id, dependency_id),
+                FOREIGN KEY (meeting_note_id) REFERENCES meeting_note(id) ON DELETE CASCADE,
+                FOREIGN KEY (dependency_id) REFERENCES dependency(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS meeting_note_theme (
+                meeting_note_id INTEGER NOT NULL,
+                theme_id INTEGER NOT NULL,
+                PRIMARY KEY (meeting_note_id, theme_id),
+                FOREIGN KEY (meeting_note_id) REFERENCES meeting_note(id) ON DELETE CASCADE,
+                FOREIGN KEY (theme_id) REFERENCES theme(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS meeting_note_evaluation (
+                meeting_note_id INTEGER NOT NULL,
+                evaluation_id INTEGER NOT NULL,
+                PRIMARY KEY (meeting_note_id, evaluation_id),
+                FOREIGN KEY (meeting_note_id) REFERENCES meeting_note(id) ON DELETE CASCADE,
+                FOREIGN KEY (evaluation_id) REFERENCES evaluation(id) ON DELETE CASCADE
             );
             """
         )
@@ -193,6 +234,17 @@ def init_db():
         evaluation_columns = [row["name"] for row in evaluation_info]
         if "note" not in evaluation_columns:
             conn.execute("ALTER TABLE evaluation ADD COLUMN note TEXT")
+
+        meeting_note_info = conn.execute("PRAGMA table_info(meeting_note)").fetchall()
+        meeting_note_columns = [row["name"] for row in meeting_note_info]
+        if "meeting_date" not in meeting_note_columns:
+            conn.execute("ALTER TABLE meeting_note ADD COLUMN meeting_date TEXT")
+        if "topic" not in meeting_note_columns:
+            conn.execute("ALTER TABLE meeting_note ADD COLUMN topic TEXT")
+        if "note" not in meeting_note_columns:
+            conn.execute("ALTER TABLE meeting_note ADD COLUMN note TEXT NOT NULL DEFAULT ''")
+        if "note_type" not in meeting_note_columns:
+            conn.execute("ALTER TABLE meeting_note ADD COLUMN note_type TEXT NOT NULL DEFAULT ''")
         conn.execute(
             """
             INSERT OR IGNORE INTO theme (name)
@@ -240,6 +292,21 @@ def fetch_theme_rows():
 def fetch_evaluation_rows():
     with get_conn() as conn:
         rows = conn.execute("SELECT * FROM evaluation ORDER BY name").fetchall()
+    return rows
+
+
+def fetch_meeting_notes():
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, meeting_date, topic, note_type, note
+            FROM meeting_note
+            ORDER BY
+                CASE WHEN meeting_date IS NULL OR TRIM(meeting_date) = '' THEN 1 ELSE 0 END,
+                meeting_date DESC,
+                id DESC
+            """
+        ).fetchall()
     return rows
 
 
@@ -309,6 +376,42 @@ def fetch_backlogs_for_dependency(dependency_id):
     return rows
 
 
+def fetch_meeting_note_backlog_ids(meeting_note_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT backlog_id FROM meeting_note_backlog WHERE meeting_note_id = ?",
+            (meeting_note_id,),
+        ).fetchall()
+    return [row["backlog_id"] for row in rows]
+
+
+def fetch_meeting_note_dependency_ids(meeting_note_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT dependency_id FROM meeting_note_dependency WHERE meeting_note_id = ?",
+            (meeting_note_id,),
+        ).fetchall()
+    return [row["dependency_id"] for row in rows]
+
+
+def fetch_meeting_note_theme_ids(meeting_note_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT theme_id FROM meeting_note_theme WHERE meeting_note_id = ?",
+            (meeting_note_id,),
+        ).fetchall()
+    return [row["theme_id"] for row in rows]
+
+
+def fetch_meeting_note_evaluation_ids(meeting_note_id):
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT evaluation_id FROM meeting_note_evaluation WHERE meeting_note_id = ?",
+            (meeting_note_id,),
+        ).fetchall()
+    return [row["evaluation_id"] for row in rows]
+
+
 def insert_dependency(conn, task, sub_task, team):
     cursor = conn.execute(
         "INSERT INTO dependency (task, sub_task, team) VALUES (?, ?, ?)",
@@ -330,6 +433,62 @@ def insert_evaluation(conn, name, note=None):
         (name, note),
     )
     return cursor.lastrowid
+
+
+def insert_meeting_note(conn, meeting_date, topic, note_type, note):
+    cursor = conn.execute(
+        "INSERT INTO meeting_note (meeting_date, topic, note_type, note) VALUES (?, ?, ?, ?)",
+        (meeting_date, topic, note_type, note),
+    )
+    return cursor.lastrowid
+
+
+def upsert_meeting_note_backlogs(conn, meeting_note_id, backlog_ids):
+    conn.execute(
+        "DELETE FROM meeting_note_backlog WHERE meeting_note_id = ?",
+        (meeting_note_id,),
+    )
+    for backlog_id in backlog_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO meeting_note_backlog (meeting_note_id, backlog_id) VALUES (?, ?)",
+            (meeting_note_id, backlog_id),
+        )
+
+
+def upsert_meeting_note_dependencies(conn, meeting_note_id, dependency_ids):
+    conn.execute(
+        "DELETE FROM meeting_note_dependency WHERE meeting_note_id = ?",
+        (meeting_note_id,),
+    )
+    for dependency_id in dependency_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO meeting_note_dependency (meeting_note_id, dependency_id) VALUES (?, ?)",
+            (meeting_note_id, dependency_id),
+        )
+
+
+def upsert_meeting_note_themes(conn, meeting_note_id, theme_ids):
+    conn.execute(
+        "DELETE FROM meeting_note_theme WHERE meeting_note_id = ?",
+        (meeting_note_id,),
+    )
+    for theme_id in theme_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO meeting_note_theme (meeting_note_id, theme_id) VALUES (?, ?)",
+            (meeting_note_id, theme_id),
+        )
+
+
+def upsert_meeting_note_evaluations(conn, meeting_note_id, evaluation_ids):
+    conn.execute(
+        "DELETE FROM meeting_note_evaluation WHERE meeting_note_id = ?",
+        (meeting_note_id,),
+    )
+    for evaluation_id in evaluation_ids:
+        conn.execute(
+            "INSERT OR IGNORE INTO meeting_note_evaluation (meeting_note_id, evaluation_id) VALUES (?, ?)",
+            (meeting_note_id, evaluation_id),
+        )
 
 
 def insert_backlog(
@@ -430,7 +589,7 @@ st.markdown(
 
 tab_choice = st.radio(
     "View",
-    ["Backlog", "Dependencies", "Themes", "Evaluations", "Sprint x Team"],
+    ["Backlog", "Dependencies", "Themes", "Evaluations", "Meeting Notes", "Sprint x Team"],
     horizontal=True,
     key="active_tab",
     label_visibility="collapsed",
@@ -1951,6 +2110,234 @@ if tab_choice == "Evaluations":
         st.info("Select evaluations from the list to edit or delete.")
     elif evaluation_rows and len(selected_ids) > 1:
         st.info("Multiple items selected. Edit is disabled; Delete is enabled.")
+
+if tab_choice == "Meeting Notes":
+    meeting_rows = fetch_meeting_notes()
+    note_type_options = ["Todo", "Decision"]
+    backlog_rows = fetch_backlogs()
+    dependency_rows = fetch_dependencies()
+    theme_rows = fetch_theme_rows()
+    evaluation_rows = fetch_evaluation_rows()
+
+    backlog_choices = {
+        backlog_label(row): row["id"] for row in backlog_rows
+    }
+    dependency_choices = {
+        dependency_label(row): row["id"] for row in dependency_rows
+    }
+    theme_choices = {row["name"]: row["id"] for row in theme_rows}
+    evaluation_choices = {row["name"]: row["id"] for row in evaluation_rows}
+
+    backlog_labels = list(backlog_choices.keys())
+    dependency_labels = list(dependency_choices.keys())
+    theme_labels = list(theme_choices.keys())
+    evaluation_labels = list(evaluation_choices.keys())
+
+    @st.dialog("Edit meeting note")
+    def edit_meeting_note_dialog(note_row):
+        selected_backlog_ids = fetch_meeting_note_backlog_ids(note_row["id"])
+        selected_dependency_ids = fetch_meeting_note_dependency_ids(note_row["id"])
+        selected_theme_ids = fetch_meeting_note_theme_ids(note_row["id"])
+        selected_evaluation_ids = fetch_meeting_note_evaluation_ids(note_row["id"])
+
+        backlog_selected_labels = [
+            label
+            for label, item_id in backlog_choices.items()
+            if item_id in selected_backlog_ids
+        ]
+        dependency_selected_labels = [
+            label
+            for label, item_id in dependency_choices.items()
+            if item_id in selected_dependency_ids
+        ]
+        theme_selected_labels = [
+            label for label, item_id in theme_choices.items() if item_id in selected_theme_ids
+        ]
+        evaluation_selected_labels = [
+            label
+            for label, item_id in evaluation_choices.items()
+            if item_id in selected_evaluation_ids
+        ]
+
+        with st.form("edit_meeting_note_form"):
+            meeting_date = st.text_input(
+                "Meeting date (optional)",
+                value=note_row["meeting_date"] or "",
+            )
+            topic = st.text_input(
+                "Topic (optional)",
+                value=note_row["topic"] or "",
+            )
+            selected_backlogs = st.multiselect(
+                "Assign to backlogs",
+                backlog_labels,
+                default=backlog_selected_labels,
+            )
+            selected_dependencies = st.multiselect(
+                "Assign to dependencies",
+                dependency_labels,
+                default=dependency_selected_labels,
+            )
+            selected_themes = st.multiselect(
+                "Assign to themes",
+                theme_labels,
+                default=theme_selected_labels,
+            )
+            selected_evaluations = st.multiselect(
+                "Assign to evaluations",
+                evaluation_labels,
+                default=evaluation_selected_labels,
+            )
+            selected_note_type = (
+                note_row["note_type"].strip().lower()
+                if note_row["note_type"]
+                else "todo"
+            )
+            note_type_index = 0 if selected_note_type != "decision" else 1
+            note_type = st.selectbox(
+                "Type",
+                note_type_options,
+                index=note_type_index,
+            )
+            note = st.text_area(
+                "Note (bullet)",
+                value=note_row["note"] or "",
+                height=140,
+            )
+            submitted = st.form_submit_button("Update note")
+            if submitted:
+                if not note.strip():
+                    st.error("Note is required.")
+                else:
+                    backlog_ids = [backlog_choices[label] for label in selected_backlogs]
+                    dependency_ids = [
+                        dependency_choices[label] for label in selected_dependencies
+                    ]
+                    theme_ids = [theme_choices[label] for label in selected_themes]
+                    evaluation_ids = [
+                        evaluation_choices[label] for label in selected_evaluations
+                    ]
+                    with get_conn() as conn:
+                        conn.execute(
+                            """
+                            UPDATE meeting_note
+                            SET meeting_date = ?, topic = ?, note_type = ?, note = ?
+                            WHERE id = ?
+                            """,
+                            (
+                                meeting_date.strip() or None,
+                                topic.strip() or None,
+                                note_type.lower(),
+                                note.strip(),
+                                note_row["id"],
+                            ),
+                        )
+                        upsert_meeting_note_backlogs(
+                            conn, note_row["id"], backlog_ids
+                        )
+                        upsert_meeting_note_dependencies(
+                            conn, note_row["id"], dependency_ids
+                        )
+                        upsert_meeting_note_themes(conn, note_row["id"], theme_ids)
+                        upsert_meeting_note_evaluations(
+                            conn, note_row["id"], evaluation_ids
+                        )
+                    st.success("Meeting note updated.")
+                    st.rerun()
+
+    @st.dialog("Delete meeting note")
+    def delete_meeting_note_dialog(selected_ids, note_lookup):
+        items = []
+        for item_id in selected_ids:
+            row = note_lookup.get(item_id)
+            if row:
+                preview = row["note"] or ""
+                items.append(preview[:80])
+        st.write(f"Delete {len(selected_ids)} meeting note(s)?")
+        if items:
+            st.write(items)
+        if st.button("Confirm delete", type="primary"):
+            placeholders = ",".join(["?"] * len(selected_ids))
+            with get_conn() as conn:
+                conn.execute(
+                    f"DELETE FROM meeting_note WHERE id IN ({placeholders})",
+                    tuple(selected_ids),
+                )
+            st.success("Meeting note deleted.")
+            st.rerun()
+
+    with st.expander("Add meeting note", expanded=True):
+        default_meeting_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+        meeting_date = st.text_input(
+            "Meeting date (optional)",
+            value=default_meeting_date,
+            key="meeting_note_date",
+        )
+        topic = st.text_input(
+            "Topic (optional)",
+            key="meeting_note_topic",
+        )
+        note_text = st.chat_input("Add a meeting note")
+        if note_text is not None:
+            if not note_text.strip():
+                st.error("Note is required.")
+            else:
+                with get_conn() as conn:
+                    note_id = insert_meeting_note(
+                        conn,
+                        meeting_date.strip() or None,
+                        topic.strip() or None,
+                        "todo",
+                        note_text.strip(),
+                    )
+                st.success("Meeting note added.")
+                st.rerun()
+
+    with st.expander("Meeting notes table", expanded=True):
+        if meeting_rows:
+            meeting_df = pd.DataFrame([dict(row) for row in meeting_rows])
+            selection = st.dataframe(
+                meeting_df,
+                width="stretch",
+                on_select="rerun",
+                selection_mode="multi-row",
+            )
+            if selection and selection.selection.rows:
+                selected_ids = [
+                    int(meeting_df.iloc[index]["id"]) for index in selection.selection.rows
+                ]
+                st.session_state["selected_meeting_note_ids"] = selected_ids
+            else:
+                st.session_state.pop("selected_meeting_note_ids", None)
+        else:
+            st.info("No meeting notes yet.")
+
+        note_by_id = {row["id"]: row for row in meeting_rows}
+        selected_ids = st.session_state.get("selected_meeting_note_ids", [])
+        selected_note = note_by_id.get(selected_ids[0]) if len(selected_ids) == 1 else None
+
+        if selected_ids:
+            if len(selected_ids) == 1 and selected_note:
+                st.caption(f"Selected: {selected_note['note'][:60]}")
+            else:
+                st.caption(f"Selected: {len(selected_ids)} items")
+        else:
+            st.caption("Selected: none")
+
+        action_cols = st.columns(2, gap="small")
+        with action_cols[0]:
+            edit_disabled = selected_note is None
+            if st.button("Edit selected note", disabled=edit_disabled):
+                edit_meeting_note_dialog(selected_note)
+        with action_cols[1]:
+            delete_disabled = not selected_ids
+            if st.button("Delete selected note", disabled=delete_disabled):
+                delete_meeting_note_dialog(selected_ids, note_by_id)
+
+        if meeting_rows and not selected_ids:
+            st.info("Select meeting notes from the list to edit or delete.")
+        elif meeting_rows and len(selected_ids) > 1:
+            st.info("Multiple items selected. Edit is disabled; Delete is enabled.")
 
 if tab_choice == "Sprint x Team":
     st.subheader("Sprint x Team points")
