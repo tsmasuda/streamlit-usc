@@ -398,6 +398,31 @@ def fetch_backlogs_for_dependency(dependency_id):
     return rows
 
 
+def fetch_backlog_dependency_rows():
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                b.id AS backlog_id,
+                b.task AS backlog_task,
+                b.sub_task AS backlog_sub_task,
+                b.theme AS backlog_theme,
+                b.evaluation AS backlog_evaluation,
+                b.team AS backlog_team,
+                b.sprint AS backlog_sprint,
+                d.id AS dependency_id,
+                d.task AS dependency_task,
+                d.sub_task AS dependency_sub_task,
+                d.team AS dependency_team
+            FROM backlog b
+            INNER JOIN backlog_dependency bd ON b.id = bd.backlog_id
+            INNER JOIN dependency d ON d.id = bd.dependency_id
+            ORDER BY b.id, d.id
+            """
+        ).fetchall()
+    return rows
+
+
 def fetch_meeting_note_backlog_ids(meeting_note_id):
     with get_conn() as conn:
         rows = conn.execute(
@@ -634,7 +659,16 @@ st.markdown(
 
 tab_choice = st.radio(
     "View",
-    ["Backlog", "Dependencies", "Themes", "Evaluations", "Meetings", "Meeting Notes", "Sprint x Team"],
+    [
+        "Backlog",
+        "Dependencies",
+        "Backlog x Dependencies",
+        "Themes",
+        "Evaluations",
+        "Meetings",
+        "Meeting Notes",
+        "Sprint x Team",
+    ],
     horizontal=True,
     key="active_tab",
     label_visibility="collapsed",
@@ -1969,6 +2003,15 @@ if tab_choice == "Dependencies":
         st.info("Select dependencies from the list to edit or delete.")
     elif dependency_rows and len(selected_ids) > 1:
         st.info("Multiple items selected. Edit is disabled; Delete is enabled.")
+
+if tab_choice == "Backlog x Dependencies":
+    st.subheader("Backlog x Dependencies")
+    join_rows = fetch_backlog_dependency_rows()
+    if join_rows:
+        join_df = pd.DataFrame([dict(row) for row in join_rows])
+        st.dataframe(join_df, width="stretch")
+    else:
+        st.info("No backlog/dependency links yet.")
 
 if tab_choice == "Themes":
     theme_rows = fetch_theme_rows()
